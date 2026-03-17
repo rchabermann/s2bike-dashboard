@@ -1,66 +1,89 @@
 "use client";
-
 import { useState, useMemo } from "react";
 import { DashboardData, DailyMetrics, AdPerformance } from "@/lib/sheets";
+import { LeadRow } from "@/lib/leads";
 import { KPICard } from "@/components/KPICard";
 import { SpendChart } from "@/components/SpendChart";
 import { ConversationsChart } from "@/components/ConversationsChart";
 import { AdPerformanceTable } from "@/components/AdPerformanceTable";
 import { CPMChart } from "@/components/CPMChart";
-import { format, parseISO } from "date-fns";
+import { LeadsCRM } from "@/components/LeadsCRM";
+import { format, parseISO, subDays } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
 function fmtBRL(n: number) {
   return n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
-
-function fmtDate(dateStr: string) {
-  try { return format(parseISO(dateStr), "dd 'de' MMM", { locale: ptBR }); }
-  catch { return dateStr; }
+function fmtDate(d: string) {
+  try { return format(parseISO(d), "dd 'de' MMM", { locale: ptBR }); } catch { return d; }
 }
-
 function fmtLastUpdated(iso: string) {
-  try { return format(new Date(iso), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR }); }
-  catch { return iso; }
+  try { return format(new Date(iso), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR }); } catch { return iso; }
+}
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+function daysAgoStr(n: number) {
+  return subDays(new Date(), n).toISOString().slice(0, 10);
 }
 
-interface Props {
-  data: DashboardData;
-}
+const PRESET_RANGES = [
+  { label: "7 dias", getValue: () => ({ start: daysAgoStr(7), end: todayStr() }) },
+  { label: "14 dias", getValue: () => ({ start: daysAgoStr(14), end: todayStr() }) },
+  { label: "30 dias", getValue: () => ({ start: daysAgoStr(30), end: todayStr() }) },
+  { label: "Total", getValue: null },
+];
 
-export function Dashboard({ data }: Props) {
+const AD_COLORS: Record<string, string> = {
+  "Racevox Evo": "#4f8ef7",
+  "Racevox Evo 2": "#a78bfa",
+  "Bike Elétrica - Gavaia e Bruno": "#f97316",
+  "Exalt E-trail": "#22c55e",
+};
+
+type Tab = "ads" | "leads";
+
+export function Dashboard({ data, leads }: { data: DashboardData; leads: LeadRow[] }) {
   const { rows, daily, byAd, dateRange, lastUpdated } = data;
 
-  // --- Filter state ---
+  const [activeTab, setActiveTab] = useState<Tab>("ads");
   const [startDate, setStartDate] = useState(dateRange.start);
   const [endDate, setEndDate] = useState(dateRange.end);
   const [selectedAds, setSelectedAds] = useState<string[]>([]);
+  const [activePreset, setActivePreset] = useState<string | null>("Total");
 
-  const adNames = useMemo(() => Array.from(new Set(rows.map((r) => r.adName))).sort(), [rows]);
+  const adNames = useMemo(() => Array.from(new Set(rows.map(r => r.adName))).sort(), [rows]);
+
+  const applyPreset = (label: string, getValue: (() => { start: string; end: string }) | null) => {
+    setActivePreset(label);
+    if (getValue) {
+      const { start, end } = getValue();
+      setStartDate(start < dateRange.start ? dateRange.start : start);
+      setEndDate(end);
+    } else {
+      setStartDate(dateRange.start);
+      setEndDate(dateRange.end);
+    }
+  };
 
   const toggleAd = (name: string) => {
-    setSelectedAds((prev) =>
-      prev.includes(name) ? prev.filter((a) => a !== name) : [...prev, name]
-    );
+    setActivePreset(null);
+    setSelectedAds(prev => prev.includes(name) ? prev.filter(a => a !== name) : [...prev, name]);
   };
 
   const clearFilters = () => {
     setStartDate(dateRange.start);
     setEndDate(dateRange.end);
     setSelectedAds([]);
+    setActivePreset("Total");
   };
 
-  const hasActiveFilters =
-    startDate !== dateRange.start || endDate !== dateRange.end || selectedAds.length > 0;
+  const hasActiveFilters = startDate !== dateRange.start || endDate !== dateRange.end || selectedAds.length > 0;
 
-  // --- Filtered data ---
-  const filteredRows = useMemo(() => {
-    return rows.filter((r) => {
-      const inDateRange = r.day >= startDate && r.day <= endDate;
-      const inAds = selectedAds.length === 0 || selectedAds.includes(r.adName);
-      return inDateRange && inAds;
-    });
-  }, [rows, startDate, endDate, selectedAds]);
+  const filteredRows = useMemo(() => rows.filter(r =>
+    r.day >= startDate && r.day <= endDate &&
+    (selectedAds.length === 0 || selectedAds.includes(r.adName))
+  ), [rows, startDate, endDate, selectedAds]);
 
   const filteredDaily = useMemo((): DailyMetrics[] => {
     const dayMap = new Map<string, DailyMetrics>();
@@ -72,22 +95,16 @@ export function Dashboard({ data }: Props) {
         d.reach += row.reach;
         d.linkClicks += row.linkClicks;
         d.messagingConversations += row.messagingConversations;
+        d.frequency += row.frequency;
       } else {
-        dayMap.set(row.day, {
-          day: row.day,
-          amountSpent: row.amountSpent,
-          impressions: row.impressions,
-          reach: row.reach,
-          linkClicks: row.linkClicks,
-          messagingConversations: row.messagingConversations,
-          cpm: 0, ctr: 0, cpc: 0,
-        });
+        dayMap.set(row.day, { day: row.day, amountSpent: row.amountSpent, impressions: row.impressions, reach: row.reach, linkClicks: row.linkClicks, messagingConversations: row.messagingConversations, frequency: row.frequency, cpm: 0, ctr: 0, cpc: 0 });
       }
     }
     return Array.from(dayMap.values())
       .sort((a, b) => a.day.localeCompare(b.day))
-      .map((d) => ({
+      .map(d => ({
         ...d,
+        frequency: d.impressions > 0 && d.reach > 0 ? d.impressions / d.reach : 0,
         cpm: d.impressions > 0 ? (d.amountSpent / d.impressions) * 1000 : 0,
         ctr: d.impressions > 0 ? (d.linkClicks / d.impressions) * 100 : 0,
         cpc: d.linkClicks > 0 ? d.amountSpent / d.linkClicks : 0,
@@ -98,58 +115,27 @@ export function Dashboard({ data }: Props) {
     const adMap = new Map<string, AdPerformance>();
     for (const row of filteredRows) {
       const a = adMap.get(row.adName);
-      if (a) {
-        a.amountSpent += row.amountSpent;
-        a.impressions += row.impressions;
-        a.reach += row.reach;
-        a.linkClicks += row.linkClicks;
-        a.messagingConversations += row.messagingConversations;
-      } else {
-        adMap.set(row.adName, {
-          adName: row.adName,
-          amountSpent: row.amountSpent,
-          impressions: row.impressions,
-          reach: row.reach,
-          linkClicks: row.linkClicks,
-          messagingConversations: row.messagingConversations,
-          avgCpc: 0, avgCpm: 0, avgCtr: 0,
-        });
-      }
+      if (a) { a.amountSpent += row.amountSpent; a.impressions += row.impressions; a.reach += row.reach; a.linkClicks += row.linkClicks; a.messagingConversations += row.messagingConversations; }
+      else adMap.set(row.adName, { adName: row.adName, amountSpent: row.amountSpent, impressions: row.impressions, reach: row.reach, linkClicks: row.linkClicks, messagingConversations: row.messagingConversations, avgCpc: 0, avgCpm: 0, avgCtr: 0 });
     }
     return Array.from(adMap.values())
-      .map((a) => ({
-        ...a,
-        avgCpm: a.impressions > 0 ? (a.amountSpent / a.impressions) * 1000 : 0,
-        avgCtr: a.impressions > 0 ? (a.linkClicks / a.impressions) * 100 : 0,
-        avgCpc: a.linkClicks > 0 ? a.amountSpent / a.linkClicks : 0,
-      }))
+      .map(a => ({ ...a, avgCpm: a.impressions > 0 ? (a.amountSpent / a.impressions) * 1000 : 0, avgCtr: a.impressions > 0 ? (a.linkClicks / a.impressions) * 100 : 0, avgCpc: a.linkClicks > 0 ? a.amountSpent / a.linkClicks : 0 }))
       .sort((a, b) => b.amountSpent - a.amountSpent);
   }, [filteredRows]);
 
   const totals = useMemo(() => {
-    const totalSpent = filteredRows.reduce((s, r) => s + r.amountSpent, 0);
-    const totalImpressions = filteredRows.reduce((s, r) => s + r.impressions, 0);
-    const totalReach = filteredDaily.reduce((s, d) => s + d.reach, 0);
-    const totalClicks = filteredRows.reduce((s, r) => s + r.linkClicks, 0);
-    const totalConversations = filteredRows.reduce((s, r) => s + r.messagingConversations, 0);
+    const s = filteredRows.reduce((acc, r) => acc + r.amountSpent, 0);
+    const imp = filteredRows.reduce((acc, r) => acc + r.impressions, 0);
+    const reach = filteredDaily.reduce((acc, d) => acc + d.reach, 0);
+    const clicks = filteredRows.reduce((acc, r) => acc + r.linkClicks, 0);
+    const convs = filteredRows.reduce((acc, r) => acc + r.messagingConversations, 0);
     return {
-      amountSpent: totalSpent,
-      impressions: totalImpressions,
-      reach: totalReach,
-      linkClicks: totalClicks,
-      messagingConversations: totalConversations,
-      avgCpm: totalImpressions > 0 ? (totalSpent / totalImpressions) * 1000 : 0,
-      avgCtr: totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0,
-      avgCpc: totalClicks > 0 ? totalSpent / totalClicks : 0,
+      amountSpent: s, impressions: imp, reach, linkClicks: clicks, messagingConversations: convs,
+      avgCpl: convs > 0 ? s / convs : 0,
+      avgCtr: imp > 0 ? (clicks / imp) * 100 : 0,
+      avgCpc: clicks > 0 ? s / clicks : 0,
     };
   }, [filteredRows, filteredDaily]);
-
-  const AD_COLORS: Record<string, string> = {
-    "Racevox Evo": "#4f8ef7",
-    "Racevox Evo 2": "#a78bfa",
-    "Bike Elétrica - Gavaia e Bruno": "#f97316",
-    "Exalt E-trail": "#22c55e",
-  };
 
   return (
     <main className="min-h-screen grid-bg" style={{ background: "var(--bg)" }}>
@@ -157,9 +143,7 @@ export function Dashboard({ data }: Props) {
       <header className="border-b" style={{ borderColor: "var(--border)" }}>
         <div className="max-w-7xl mx-auto px-6 py-5 flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-4">
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center text-lg" style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }}>
-              🚴
-            </div>
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center text-lg" style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }}>🚴</div>
             <div>
               <h1 className="font-bold text-lg" style={{ color: "var(--text-primary)" }}>S2 Bike</h1>
               <p className="text-xs" style={{ color: "var(--text-muted)" }}>Meta Ads · [RCH] Campanha WhatsApp</p>
@@ -168,144 +152,134 @@ export function Dashboard({ data }: Props) {
           <div className="flex items-center gap-6">
             <div className="text-right">
               <p className="text-xs" style={{ color: "var(--text-muted)" }}>Período total</p>
-              <p className="mono text-sm font-medium" style={{ color: "var(--text-secondary)" }}>
-                {fmtDate(dateRange.start)} → {fmtDate(dateRange.end)}
-              </p>
+              <p className="mono text-sm font-medium" style={{ color: "var(--text-secondary)" }}>{fmtDate(dateRange.start)} → {fmtDate(dateRange.end)}</p>
             </div>
             <div className="text-right">
               <p className="text-xs" style={{ color: "var(--text-muted)" }}>Atualizado</p>
-              <p className="mono text-xs" style={{ color: "var(--accent-green)" }}>
-                {fmtLastUpdated(lastUpdated)}
-              </p>
+              <p className="mono text-xs" style={{ color: "var(--accent-green)" }}>{fmtLastUpdated(lastUpdated)}</p>
             </div>
           </div>
+        </div>
+        {/* Tabs */}
+        <div className="max-w-7xl mx-auto px-6 flex gap-1">
+          {([["ads", "📊 Meta Ads"], ["leads", "👥 Leads"]] as [Tab, string][]).map(([tab, label]) => (
+            <button key={tab} onClick={() => setActiveTab(tab)}
+              className="text-sm font-medium px-4 py-2 border-b-2 transition-colors"
+              style={{
+                borderColor: activeTab === tab ? "var(--accent-blue)" : "transparent",
+                color: activeTab === tab ? "var(--accent-blue)" : "var(--text-muted)",
+                background: "transparent", cursor: "pointer",
+              }}>
+              {label}
+            </button>
+          ))}
         </div>
       </header>
 
       <div className="max-w-7xl mx-auto px-6 py-8 space-y-8">
+        {activeTab === "leads" ? (
+          <LeadsCRM leads={leads} />
+        ) : (
+          <>
+            {/* Filters */}
+            <section className="card p-5 animate-in stagger-1">
+              <div className="flex flex-wrap items-end gap-6">
+                {/* Preset buttons */}
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: "var(--text-muted)" }}>Período</p>
+                  <div className="flex gap-2">
+                    {PRESET_RANGES.map(({ label, getValue }) => (
+                      <button key={label} onClick={() => applyPreset(label, getValue)}
+                        className="mono text-xs px-3 py-1.5 rounded-lg transition-all"
+                        style={{
+                          border: `1px solid ${activePreset === label ? "var(--accent-blue)" : "var(--border-bright)"}`,
+                          background: activePreset === label ? "rgba(79,142,247,0.15)" : "transparent",
+                          color: activePreset === label ? "var(--accent-blue)" : "var(--text-secondary)",
+                          cursor: "pointer",
+                        }}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-        {/* ── FILTERS ── */}
-        <section className="card p-5 animate-in stagger-1">
-          <div className="flex flex-wrap items-end gap-6">
-            {/* Date range */}
-            <div className="flex items-end gap-3">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: "var(--text-muted)" }}>De</p>
-                <input
-                  type="date"
-                  value={startDate}
-                  min={dateRange.start}
-                  max={endDate}
-                  onChange={(e) => setStartDate(e.target.value)}
-                  className="mono text-sm px-3 py-2 rounded-lg outline-none"
-                  style={{
-                    background: "var(--bg)",
-                    border: "1px solid var(--border-bright)",
-                    color: "var(--text-primary)",
-                    colorScheme: "dark",
-                  }}
-                />
+                {/* Custom date range */}
+                <div className="flex items-end gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: "var(--text-muted)" }}>De</p>
+                    <input type="date" value={startDate} min={dateRange.start} max={endDate}
+                      onChange={e => { setStartDate(e.target.value); setActivePreset(null); }}
+                      className="mono text-sm px-3 py-2 rounded-lg outline-none"
+                      style={{ background: "var(--bg)", border: "1px solid var(--border-bright)", color: "var(--text-primary)", colorScheme: "dark" }} />
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: "var(--text-muted)" }}>Até</p>
+                    <input type="date" value={endDate} min={startDate} max={dateRange.end}
+                      onChange={e => { setEndDate(e.target.value); setActivePreset(null); }}
+                      className="mono text-sm px-3 py-2 rounded-lg outline-none"
+                      style={{ background: "var(--bg)", border: "1px solid var(--border-bright)", color: "var(--text-primary)", colorScheme: "dark" }} />
+                  </div>
+                </div>
+
+                {/* Ad filter */}
+                <div className="flex-1 min-w-[200px]">
+                  <p className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: "var(--text-muted)" }}>Anúncios</p>
+                  <div className="flex flex-wrap gap-2">
+                    {adNames.map(name => {
+                      const active = selectedAds.includes(name);
+                      const color = AD_COLORS[name] ?? "#7a94b0";
+                      return (
+                        <button key={name} onClick={() => toggleAd(name)}
+                          className="text-xs px-3 py-1.5 rounded-full transition-all"
+                          style={{ border: `1px solid ${active ? color : "var(--border-bright)"}`, background: active ? `${color}22` : "transparent", color: active ? color : "var(--text-secondary)", cursor: "pointer" }}>
+                          {name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {hasActiveFilters && (
+                  <button onClick={clearFilters} className="text-xs px-3 py-2 rounded-lg"
+                    style={{ border: "1px solid var(--border-bright)", color: "var(--text-muted)", background: "transparent", cursor: "pointer" }}>
+                    Limpar ×
+                  </button>
+                )}
               </div>
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: "var(--text-muted)" }}>Até</p>
-                <input
-                  type="date"
-                  value={endDate}
-                  min={startDate}
-                  max={dateRange.end}
-                  onChange={(e) => setEndDate(e.target.value)}
-                  className="mono text-sm px-3 py-2 rounded-lg outline-none"
-                  style={{
-                    background: "var(--bg)",
-                    border: "1px solid var(--border-bright)",
-                    color: "var(--text-primary)",
-                    colorScheme: "dark",
-                  }}
-                />
+
+              {hasActiveFilters && (
+                <p className="mono text-xs mt-3" style={{ color: "var(--accent-blue)" }}>
+                  Exibindo: {fmtDate(startDate)} → {fmtDate(endDate)}
+                  {selectedAds.length > 0 && ` · ${selectedAds.join(", ")}`}
+                  {" "}· {filteredRows.length} linha{filteredRows.length !== 1 ? "s" : ""}
+                </p>
+              )}
+            </section>
+
+            {/* KPIs */}
+            <section>
+              <p className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: "var(--text-muted)" }}>Resumo do Período</p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <KPICard label="Total Investido" value={`R$ ${fmtBRL(totals.amountSpent)}`} icon="💸" accentColor="var(--accent-orange)" stagger={2} />
+                <KPICard label="Impressões" value={totals.impressions.toLocaleString("pt-BR")} icon="👁️" accentColor="var(--accent-blue)" stagger={3} />
+                <KPICard label="Alcance" value={totals.reach.toLocaleString("pt-BR")} icon="📡" accentColor="var(--accent-purple)" stagger={4} />
+                <KPICard label="Cliques no Link" value={totals.linkClicks.toLocaleString("pt-BR")} subvalue={`CTR médio: ${totals.avgCtr.toFixed(2)}%`} icon="🖱️" accentColor="var(--accent-teal)" stagger={5} />
+                <KPICard label="Conversas WhatsApp" value={totals.messagingConversations.toLocaleString("pt-BR")} icon="💬" accentColor="var(--accent-green)" stagger={5} />
+                <KPICard label="CPL Médio" value={totals.avgCpl > 0 ? `R$ ${fmtBRL(totals.avgCpl)}` : "—"} subvalue="investimento / conversas" icon="📊" accentColor="var(--accent-purple)" stagger={6} />
+                <KPICard label="CPC Médio" value={totals.avgCpc > 0 ? `R$ ${fmtBRL(totals.avgCpc)}` : "—"} icon="🎯" accentColor="var(--accent-teal)" stagger={7} />
+                <KPICard label="Anúncios" value={String(filteredByAd.length)} icon="📣" accentColor="var(--accent-orange)" stagger={8} />
               </div>
-            </div>
+            </section>
 
-            {/* Ad filter */}
-            <div className="flex-1 min-w-[200px]">
-              <p className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: "var(--text-muted)" }}>Anúncios</p>
-              <div className="flex flex-wrap gap-2">
-                {adNames.map((name) => {
-                  const active = selectedAds.includes(name);
-                  const color = AD_COLORS[name] ?? "#7a94b0";
-                  return (
-                    <button
-                      key={name}
-                      onClick={() => toggleAd(name)}
-                      className="text-xs px-3 py-1.5 rounded-full transition-all"
-                      style={{
-                        border: `1px solid ${active ? color : "var(--border-bright)"}`,
-                        background: active ? `${color}22` : "transparent",
-                        color: active ? color : "var(--text-secondary)",
-                        cursor: "pointer",
-                      }}
-                    >
-                      {name}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Clear */}
-            {hasActiveFilters && (
-              <button
-                onClick={clearFilters}
-                className="text-xs px-3 py-2 rounded-lg transition-all"
-                style={{
-                  border: "1px solid var(--border-bright)",
-                  color: "var(--text-muted)",
-                  background: "transparent",
-                  cursor: "pointer",
-                }}
-              >
-                Limpar filtros ×
-              </button>
-            )}
-          </div>
-
-          {/* Active filter summary */}
-          {hasActiveFilters && (
-            <p className="mono text-xs mt-3" style={{ color: "var(--accent-blue)" }}>
-              Exibindo: {fmtDate(startDate)} → {fmtDate(endDate)}
-              {selectedAds.length > 0 && ` · ${selectedAds.join(", ")}`}
-              {" "}· {filteredRows.length} linha{filteredRows.length !== 1 ? "s" : ""}
-            </p>
-          )}
-        </section>
-
-        {/* KPI Grid */}
-        <section>
-          <p className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: "var(--text-muted)" }}>
-            Resumo do Período
-          </p>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <KPICard label="Total Investido" value={`R$ ${fmtBRL(totals.amountSpent)}`} icon="💸" accentColor="var(--accent-orange)" stagger={2} />
-            <KPICard label="Impressões" value={totals.impressions.toLocaleString("pt-BR")} icon="👁️" accentColor="var(--accent-blue)" stagger={3} />
-            <KPICard label="Alcance" value={totals.reach.toLocaleString("pt-BR")} icon="📡" accentColor="var(--accent-purple)" stagger={4} />
-            <KPICard label="Cliques no Link" value={totals.linkClicks.toLocaleString("pt-BR")} subvalue={`CTR médio: ${totals.avgCtr.toFixed(2)}%`} icon="🖱️" accentColor="var(--accent-teal)" stagger={5} />
-            <KPICard label="Conversas WhatsApp" value={totals.messagingConversations.toLocaleString("pt-BR")} icon="💬" accentColor="var(--accent-green)" stagger={5} />
-            <KPICard label="CPM Médio" value={`R$ ${fmtBRL(totals.avgCpm)}`} icon="📊" accentColor="var(--accent-purple)" stagger={6} />
-            <KPICard label="CPC Médio" value={totals.avgCpc > 0 ? `R$ ${fmtBRL(totals.avgCpc)}` : "—"} icon="🎯" accentColor="var(--accent-teal)" stagger={7} />
-            <KPICard label="Anúncios" value={String(filteredByAd.length)} icon="📣" accentColor="var(--accent-orange)" stagger={8} />
-          </div>
-        </section>
-
-        {/* Charts */}
-        <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <SpendChart data={filteredDaily} />
-          <ConversationsChart data={filteredDaily} />
-        </section>
-        <section>
-          <CPMChart data={filteredDaily} />
-        </section>
-        <section>
-          <AdPerformanceTable data={filteredByAd} totalSpent={totals.amountSpent} />
-        </section>
+            {/* Charts */}
+            <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <SpendChart data={filteredDaily} />
+              <ConversationsChart data={filteredDaily} />
+            </section>
+            <section><CPMChart data={filteredDaily} /></section>
+            <section><AdPerformanceTable data={filteredByAd} totalSpent={totals.amountSpent} /></section>
+          </>
+        )}
 
         <footer className="text-center pb-8">
           <p className="mono text-xs" style={{ color: "var(--text-muted)" }}>
