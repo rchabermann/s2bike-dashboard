@@ -1,3 +1,5 @@
+import Papa from "papaparse";
+
 export interface AdRow {
   reach: number;
   impressions: number;
@@ -62,10 +64,16 @@ const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?forma
 
 function parseBR(val: string): number {
   if (!val || val.trim() === "") return 0;
-  // Handles Brazilian decimal format: 1.234,56 → 1234.56
-  const cleaned = val.replace(/\./g, "").replace(",", ".");
-  const n = parseFloat(cleaned);
-  return isNaN(n) ? 0 : n;
+  const s = val.trim();
+  // Brazilian: 1.234,56
+  if (s.includes(".") && s.includes(",")) {
+    return parseFloat(s.replace(/\./g, "").replace(",", ".")) || 0;
+  }
+  // Decimal comma only: 1,58
+  if (s.includes(",")) {
+    return parseFloat(s.replace(",", ".")) || 0;
+  }
+  return parseFloat(s) || 0;
 }
 
 export async function fetchDashboardData(): Promise<DashboardData> {
@@ -73,46 +81,57 @@ export async function fetchDashboardData(): Promise<DashboardData> {
   if (!res.ok) throw new Error(`Failed to fetch sheet: ${res.status}`);
 
   const text = await res.text();
-  const lines = text.split("\n").filter((l) => l.trim());
 
-  // Skip header row
-  const dataLines = lines.slice(1);
+  // Detect delimiter: Google Sheets uses ; for pt-BR locale
+  const firstLine = text.split("\n")[0] ?? "";
+  const delimiter = firstLine.includes(";") ? ";" : ",";
 
-  const rows: AdRow[] = dataLines
-    .map((line) => {
-      // Simple CSV parse (handles basic cases)
-      const cols = line.split(",");
-      if (cols.length < 14) return null;
+  const parsed = Papa.parse<string[]>(text, {
+    delimiter,
+    skipEmptyLines: true,
+  });
 
+  if (!parsed.data || parsed.data.length < 2) {
+    throw new Error("Planilha vazia ou nao pode ser lida.");
+  }
+
+  const dataRows = parsed.data.slice(1);
+
+  const rows: AdRow[] = dataRows
+    .map((cols): AdRow | null => {
+      if (!cols || cols.length < 14) return null;
+      const day = String(cols[13] ?? "").replace(/"/g, "").trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+      const impressions = parseBR(String(cols[1]));
+      if (impressions === 0) return null;
       return {
-        reach: parseBR(cols[0]),
-        impressions: parseBR(cols[1]),
-        frequency: parseBR(cols[2]),
-        amountSpent: parseBR(cols[3]),
-        cpm: parseBR(cols[4]),
-        linkClicks: parseBR(cols[5]),
-        ctr: parseBR(cols[6]),
-        cpc: parseBR(cols[7]),
-        messagingConversations: parseBR(cols[8]),
-        costPerConversation: parseBR(cols[9]),
-        campaignName: cols[10]?.replace(/"/g, "").trim() ?? "",
-        adSetName: cols[11]?.replace(/"/g, "").trim() ?? "",
-        adName: cols[12]?.replace(/"/g, "").trim() ?? "",
-        day: cols[13]?.replace(/"/g, "").trim() ?? "",
-      } as AdRow;
+        reach: parseBR(String(cols[0])),
+        impressions,
+        frequency: parseBR(String(cols[2])),
+        amountSpent: parseBR(String(cols[3])),
+        cpm: parseBR(String(cols[4])),
+        linkClicks: parseBR(String(cols[5])),
+        ctr: parseBR(String(cols[6])),
+        cpc: parseBR(String(cols[7])),
+        messagingConversations: parseBR(String(cols[8])),
+        costPerConversation: parseBR(String(cols[9])),
+        campaignName: String(cols[10] ?? "").replace(/"/g, "").trim(),
+        adSetName: String(cols[11] ?? "").replace(/"/g, "").trim(),
+        adName: String(cols[12] ?? "").replace(/"/g, "").trim(),
+        day,
+      };
     })
-    .filter((r): r is AdRow => r !== null && r.day !== "" && r.impressions > 0);
+    .filter((r): r is AdRow => r !== null);
 
-  // Aggregate by day
   const dayMap = new Map<string, DailyMetrics>();
   for (const row of rows) {
-    const existing = dayMap.get(row.day);
-    if (existing) {
-      existing.amountSpent += row.amountSpent;
-      existing.impressions += row.impressions;
-      existing.reach += row.reach;
-      existing.linkClicks += row.linkClicks;
-      existing.messagingConversations += row.messagingConversations;
+    const d = dayMap.get(row.day);
+    if (d) {
+      d.amountSpent += row.amountSpent;
+      d.impressions += row.impressions;
+      d.reach += row.reach;
+      d.linkClicks += row.linkClicks;
+      d.messagingConversations += row.messagingConversations;
     } else {
       dayMap.set(row.day, {
         day: row.day,
@@ -121,14 +140,13 @@ export async function fetchDashboardData(): Promise<DashboardData> {
         reach: row.reach,
         linkClicks: row.linkClicks,
         messagingConversations: row.messagingConversations,
-        cpm: row.cpm,
-        ctr: row.ctr,
-        cpc: row.cpc,
+        cpm: 0,
+        ctr: 0,
+        cpc: 0,
       });
     }
   }
 
-  // Recalculate derived metrics per day
   const daily: DailyMetrics[] = Array.from(dayMap.values())
     .sort((a, b) => a.day.localeCompare(b.day))
     .map((d) => ({
@@ -138,16 +156,15 @@ export async function fetchDashboardData(): Promise<DashboardData> {
       cpc: d.linkClicks > 0 ? d.amountSpent / d.linkClicks : 0,
     }));
 
-  // Aggregate by ad
   const adMap = new Map<string, AdPerformance>();
   for (const row of rows) {
-    const existing = adMap.get(row.adName);
-    if (existing) {
-      existing.amountSpent += row.amountSpent;
-      existing.impressions += row.impressions;
-      existing.reach += row.reach;
-      existing.linkClicks += row.linkClicks;
-      existing.messagingConversations += row.messagingConversations;
+    const a = adMap.get(row.adName);
+    if (a) {
+      a.amountSpent += row.amountSpent;
+      a.impressions += row.impressions;
+      a.reach += row.reach;
+      a.linkClicks += row.linkClicks;
+      a.messagingConversations += row.messagingConversations;
     } else {
       adMap.set(row.adName, {
         adName: row.adName,
@@ -172,13 +189,11 @@ export async function fetchDashboardData(): Promise<DashboardData> {
     }))
     .sort((a, b) => b.amountSpent - a.amountSpent);
 
-  // Totals
   const totalSpent = rows.reduce((s, r) => s + r.amountSpent, 0);
   const totalImpressions = rows.reduce((s, r) => s + r.impressions, 0);
   const totalReach = daily.reduce((s, d) => s + d.reach, 0);
   const totalClicks = rows.reduce((s, r) => s + r.linkClicks, 0);
   const totalConversations = rows.reduce((s, r) => s + r.messagingConversations, 0);
-
   const dates = rows.map((r) => r.day).sort();
 
   return {
