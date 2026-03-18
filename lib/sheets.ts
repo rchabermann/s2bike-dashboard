@@ -24,6 +24,7 @@ export interface DailyMetrics {
   reach: number;
   linkClicks: number;
   messagingConversations: number;
+  frequency: number;
   cpm: number;
   ctr: number;
   cpc: number;
@@ -151,6 +152,7 @@ export async function fetchDashboardData(): Promise<DashboardData> {
     .sort((a, b) => a.day.localeCompare(b.day))
     .map((d) => ({
       ...d,
+      frequency: d.reach > 0 ? d.impressions / d.reach : 0,
       cpm: d.impressions > 0 ? (d.amountSpent / d.impressions) * 1000 : 0,
       ctr: d.impressions > 0 ? (d.linkClicks / d.impressions) * 100 : 0,
       cpc: d.linkClicks > 0 ? d.amountSpent / d.linkClicks : 0,
