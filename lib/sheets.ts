@@ -141,6 +141,7 @@ export async function fetchDashboardData(): Promise<DashboardData> {
         reach: row.reach,
         linkClicks: row.linkClicks,
         messagingConversations: row.messagingConversations,
+        frequency: row.frequency,
         cpm: 0,
         ctr: 0,
         cpc: 0,
