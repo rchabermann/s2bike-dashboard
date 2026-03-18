@@ -83,11 +83,13 @@ async function fetchTabByGid(gid: string): Promise<LeadRow[]> {
           }
         }
 
-        // Notes: cols 7 and 8, skip pure monetary values
-        const notes = [cols[7], cols[8]]
-          .map(c => String(c ?? "").trim())
-          .filter(v => v && extractValue(v) === 0)
-          .join(" · ");
+        // Notes: prefer col 8 (more recent update), fall back to col 7
+        const note8 = String(cols[8] ?? "").trim();
+        const note7 = String(cols[7] ?? "").trim();
+        const noteCandidate = (note8 && extractValue(note8) === 0) ? note8
+          : (note7 && extractValue(note7) === 0) ? note7
+          : "";
+        const notes = noteCandidate;
 
         return {
           dateRaw,
