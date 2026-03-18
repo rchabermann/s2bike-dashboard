@@ -11,6 +11,7 @@ export interface LeadRow {
   status: string;
   notes: string;
   saleValue: number;
+  conclusion: string;
 }
 
 const LEADS_SHEET_ID = "1oJx-hWRGL-SlbpYqT_1MR_fIvAxZHpPiezkAO28Y1cc";
@@ -24,17 +25,12 @@ function parseDate(val: string): string {
   return s;
 }
 
-function parseSaleValue(cols: string[]): number {
-  // Check columns 8-11 for monetary values
-  for (let i = 8; i <= 11; i++) {
-    const val = String(cols[i] ?? "").trim();
-    if (!val) continue;
-    // Match patterns like R$18.990,50 or 250,00 or 6.925,50
-    const cleaned = val.replace(/R\$\s*/g, "").replace(/\./g, "").replace(",", ".").trim();
-    const n = parseFloat(cleaned);
-    if (!isNaN(n) && n > 0 && n < 1000000) return n;
-  }
-  return 0;
+function parseValue(val: string): number {
+  if (!val || val.trim() === "") return 0;
+  // Remove R$, spaces, dots (thousand separator), replace comma with dot
+  const cleaned = val.replace(/R\$\s*/gi, "").replace(/\s/g, "").replace(/\./g, "").replace(",", ".").trim();
+  const n = parseFloat(cleaned);
+  return (!isNaN(n) && n > 0 && n < 10000000) ? n : 0;
 }
 
 async function fetchTab(tabName: string): Promise<LeadRow[]> {
@@ -52,11 +48,31 @@ async function fetchTab(tabName: string): Promise<LeadRow[]> {
       .map((cols): LeadRow | null => {
         if (!cols || cols.length < 2) return null;
         const dateRaw = String(cols[0] ?? "").trim();
-        if (!dateRaw) return null;
+        if (!dateRaw || !/\d/.test(dateRaw)) return null;
         const name = String(cols[1] ?? "").trim();
-        if (!name) return null;
+        if (!name || name === "") return null;
+
         const status = String(cols[6] ?? "").trim();
-        const saleValue = status === "Venda" ? parseSaleValue(cols.map(c => String(c))) : 0;
+
+        // "Conclusão" = last non-empty column after col 7
+        let conclusion = "";
+        for (let i = cols.length - 1; i >= 7; i--) {
+          const v = String(cols[i] ?? "").trim();
+          if (v) { conclusion = v; break; }
+        }
+
+        // Sale value: only if status === "Venda", read from conclusion column
+        let saleValue = 0;
+        if (status === "Venda" && conclusion) {
+          saleValue = parseValue(conclusion);
+        }
+
+        // Notes: columns 7 and 8, excluding the value itself
+        const noteParts = [cols[7], cols[8]]
+          .map(c => String(c ?? "").trim())
+          .filter(v => v && parseValue(v) === 0);
+        const notes = noteParts.join(" · ");
+
         return {
           dateRaw,
           date: parseDate(dateRaw),
@@ -66,8 +82,9 @@ async function fetchTab(tabName: string): Promise<LeadRow[]> {
           bikeInterest: String(cols[4] ?? "").trim(),
           potential: String(cols[5] ?? "").trim(),
           status,
-          notes: [cols[7], cols[8]].filter(Boolean).map(s => String(s).trim()).filter(s => s && !s.match(/^R?\$?[\d.,]+$/)).join(" · "),
+          notes,
           saleValue,
+          conclusion,
         };
       })
       .filter((r): r is LeadRow => r !== null);
@@ -79,6 +96,18 @@ async function fetchTab(tabName: string): Promise<LeadRow[]> {
 export async function fetchLeads(): Promise<LeadRow[]> {
   const results = await Promise.all(TABS.map(fetchTab));
   const all = results.flat().filter(r => r.date !== "");
-  all.sort((a, b) => b.date.localeCompare(a.date));
-  return all;
+
+  // Deduplicate: same phone + same date = same lead (appears in multiple tabs)
+  const seen = new Set<string>();
+  const deduped: LeadRow[] = [];
+  for (const lead of all) {
+    const key = `${lead.phone.replace(/\D/g, "")}|${lead.date}|${lead.bikeInterest}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(lead);
+    }
+  }
+
+  deduped.sort((a, b) => b.date.localeCompare(a.date));
+  return deduped;
 }
