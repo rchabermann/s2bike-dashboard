@@ -1,15 +1,16 @@
 import Papa from "papaparse";
 
 export interface LeadRow {
-  date: string;        // YYYY-MM-DD
-  dateRaw: string;     // original DD/MM/YYYY
+  date: string;
+  dateRaw: string;
   name: string;
   phone: string;
   campaign: string;
   bikeInterest: string;
-  potential: string;   // Quente | Morno | Frio
-  status: string;      // Venda | Negociando | Encerrado
+  potential: string;
+  status: string;
   notes: string;
+  saleValue: number;
 }
 
 const LEADS_SHEET_ID = "1oJx-hWRGL-SlbpYqT_1MR_fIvAxZHpPiezkAO28Y1cc";
@@ -18,10 +19,22 @@ const TABS = ["Fev26", "Mar26"];
 function parseDate(val: string): string {
   if (!val || val.trim() === "") return "";
   const s = val.trim();
-  // DD/MM/YYYY → YYYY-MM-DD
   const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   if (m) return `${m[3]}-${m[2]}-${m[1]}`;
   return s;
+}
+
+function parseSaleValue(cols: string[]): number {
+  // Check columns 8-11 for monetary values
+  for (let i = 8; i <= 11; i++) {
+    const val = String(cols[i] ?? "").trim();
+    if (!val) continue;
+    // Match patterns like R$18.990,50 or 250,00 or 6.925,50
+    const cleaned = val.replace(/R\$\s*/g, "").replace(/\./g, "").replace(",", ".").trim();
+    const n = parseFloat(cleaned);
+    if (!isNaN(n) && n > 0 && n < 1000000) return n;
+  }
+  return 0;
 }
 
 async function fetchTab(tabName: string): Promise<LeadRow[]> {
@@ -39,9 +52,11 @@ async function fetchTab(tabName: string): Promise<LeadRow[]> {
       .map((cols): LeadRow | null => {
         if (!cols || cols.length < 2) return null;
         const dateRaw = String(cols[0] ?? "").trim();
-        if (!dateRaw || dateRaw === "") return null;
+        if (!dateRaw) return null;
         const name = String(cols[1] ?? "").trim();
-        if (!name || name === "") return null;
+        if (!name) return null;
+        const status = String(cols[6] ?? "").trim();
+        const saleValue = status === "Venda" ? parseSaleValue(cols.map(c => String(c))) : 0;
         return {
           dateRaw,
           date: parseDate(dateRaw),
@@ -50,8 +65,9 @@ async function fetchTab(tabName: string): Promise<LeadRow[]> {
           campaign: String(cols[3] ?? "").trim(),
           bikeInterest: String(cols[4] ?? "").trim(),
           potential: String(cols[5] ?? "").trim(),
-          status: String(cols[6] ?? "").trim(),
-          notes: [cols[7], cols[8], cols[9]].filter(Boolean).map(s => String(s).trim()).filter(s => s).join(" · "),
+          status,
+          notes: [cols[7], cols[8]].filter(Boolean).map(s => String(s).trim()).filter(s => s && !s.match(/^R?\$?[\d.,]+$/)).join(" · "),
+          saleValue,
         };
       })
       .filter((r): r is LeadRow => r !== null);
