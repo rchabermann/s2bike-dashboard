@@ -15,7 +15,8 @@ export interface LeadRow {
 }
 
 const LEADS_SHEET_ID = "1oJx-hWRGL-SlbpYqT_1MR_fIvAxZHpPiezkAO28Y1cc";
-const TABS = ["Fev26", "Mar26"];
+
+const TAB_GIDS = ["682545657", "953690557"]; // Fev26, Mar26
 
 function parseDate(val: string): string {
   if (!val || val.trim() === "") return "";
@@ -25,16 +26,20 @@ function parseDate(val: string): string {
   return s;
 }
 
-function parseValue(val: string): number {
-  if (!val || val.trim() === "") return 0;
-  // Remove R$, spaces, dots (thousand separator), replace comma with dot
-  const cleaned = val.replace(/R\$\s*/gi, "").replace(/\s/g, "").replace(/\./g, "").replace(",", ".").trim();
-  const n = parseFloat(cleaned);
-  return (!isNaN(n) && n > 0 && n < 10000000) ? n : 0;
+function extractValue(text: string): number {
+  if (!text || text.trim() === "") return 0;
+  // Match monetary value anywhere in string: R$18.990,50 or 6.925,50 or 250,00
+  const match = text.match(/R?\$?\s*([\d.]+,\d{2})/);
+  if (match) {
+    const cleaned = match[1].replace(/\./g, "").replace(",", ".");
+    const n = parseFloat(cleaned);
+    return (!isNaN(n) && n > 0) ? n : 0;
+  }
+  return 0;
 }
 
-async function fetchTab(tabName: string): Promise<LeadRow[]> {
-  const url = `https://docs.google.com/spreadsheets/d/${LEADS_SHEET_ID}/export?format=csv&sheet=${encodeURIComponent(tabName)}`;
+async function fetchTabByGid(gid: string): Promise<LeadRow[]> {
+  const url = `https://docs.google.com/spreadsheets/d/${LEADS_SHEET_ID}/export?format=csv&gid=${gid}`;
   try {
     const res = await fetch(url, { next: { revalidate: 3600 } });
     if (!res.ok) return [];
@@ -50,28 +55,39 @@ async function fetchTab(tabName: string): Promise<LeadRow[]> {
         const dateRaw = String(cols[0] ?? "").trim();
         if (!dateRaw || !/\d/.test(dateRaw)) return null;
         const name = String(cols[1] ?? "").trim();
-        if (!name || name === "") return null;
+        if (!name) return null;
 
         const status = String(cols[6] ?? "").trim();
 
-        // "Conclusão" = last non-empty column after col 7
+        // Conclusão = last non-empty column (col J = index 9, or beyond)
         let conclusion = "";
         for (let i = cols.length - 1; i >= 7; i--) {
           const v = String(cols[i] ?? "").trim();
           if (v) { conclusion = v; break; }
         }
 
-        // Sale value: only if status === "Venda", read from conclusion column
+        // Sale value: only if status is "Venda"
+        // Check col J (index 9) first (dedicated Conclusão column), then scan backwards
         let saleValue = 0;
-        if (status === "Venda" && conclusion) {
-          saleValue = parseValue(conclusion);
+        if (status === "Venda") {
+          // Try col J first (index 9)
+          const colJ = String(cols[9] ?? "").trim();
+          if (colJ) saleValue = extractValue(colJ);
+          // If not found, scan other columns for monetary value
+          if (saleValue === 0) {
+            for (let i = cols.length - 1; i >= 7; i--) {
+              const v = String(cols[i] ?? "").trim();
+              const extracted = extractValue(v);
+              if (extracted > 0) { saleValue = extracted; break; }
+            }
+          }
         }
 
-        // Notes: columns 7 and 8, excluding the value itself
-        const noteParts = [cols[7], cols[8]]
+        // Notes: cols 7 and 8, skip pure monetary values
+        const notes = [cols[7], cols[8]]
           .map(c => String(c ?? "").trim())
-          .filter(v => v && parseValue(v) === 0);
-        const notes = noteParts.join(" · ");
+          .filter(v => v && extractValue(v) === 0)
+          .join(" · ");
 
         return {
           dateRaw,
@@ -94,14 +110,14 @@ async function fetchTab(tabName: string): Promise<LeadRow[]> {
 }
 
 export async function fetchLeads(): Promise<LeadRow[]> {
-  const results = await Promise.all(TABS.map(fetchTab));
+  const results = await Promise.all(TAB_GIDS.map(fetchTabByGid));
   const all = results.flat().filter(r => r.date !== "");
 
-  // Deduplicate: same phone + same date = same lead (appears in multiple tabs)
+  // Deduplicate: same phone + date + name = same lead across tabs
   const seen = new Set<string>();
   const deduped: LeadRow[] = [];
   for (const lead of all) {
-    const key = `${lead.phone.replace(/\D/g, "")}|${lead.date}|${lead.bikeInterest}`;
+    const key = `${lead.phone.replace(/\D/g, "")}|${lead.date}|${lead.name.toLowerCase().trim()}`;
     if (!seen.has(key)) {
       seen.add(key);
       deduped.push(lead);
