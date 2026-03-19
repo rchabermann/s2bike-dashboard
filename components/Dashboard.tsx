@@ -43,10 +43,15 @@ const AD_COLORS: Record<string, string> = {
 
 type Tab = "ads" | "leads";
 
-export function Dashboard({ data, leads }: { data: DashboardData; leads: LeadRow[] }) {
+export function Dashboard({ data, leads, userRole, userName }: { data: DashboardData; leads: LeadRow[]; userRole: string; userName: string }) {
   const { rows, daily, byAd, dateRange, lastUpdated } = data;
 
   const [activeTab, setActiveTab] = useState<Tab>("ads");
+  const isAdmin = userRole === "admin";
+  const availableTabs: [Tab, string][] = [
+    ["ads", "📊 Meta Ads"],
+    ...(isAdmin ? [["leads", "👥 Leads"]] as [Tab, string][] : []),
+  ];
   const [startDate, setStartDate] = useState(dateRange.start);
   const [endDate, setEndDate] = useState(dateRange.end);
   const [selectedAds, setSelectedAds] = useState<string[]>([]);
@@ -158,11 +163,23 @@ export function Dashboard({ data, leads }: { data: DashboardData; leads: LeadRow
               <p className="text-xs" style={{ color: "var(--text-muted)" }}>Atualizado</p>
               <p className="mono text-xs" style={{ color: "var(--accent-green)" }}>{fmtLastUpdated(lastUpdated)}</p>
             </div>
+            <div className="flex items-center gap-3">
+              <div className="text-right">
+                <p className="text-xs" style={{ color: "var(--text-muted)" }}>Logado como</p>
+                <p className="mono text-xs font-medium" style={{ color: "var(--text-secondary)" }}>{userName}</p>
+              </div>
+              <button
+                onClick={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.href = "/login"; }}
+                className="text-xs px-3 py-2 rounded-lg transition-all"
+                style={{ border: "1px solid var(--border-bright)", color: "var(--text-muted)", background: "transparent", cursor: "pointer" }}>
+                Sair
+              </button>
+            </div>
           </div>
         </div>
         {/* Tabs */}
         <div className="max-w-7xl mx-auto px-6 flex gap-1">
-          {([["ads", "📊 Meta Ads"], ["leads", "👥 Leads"]] as [Tab, string][]).map(([tab, label]) => (
+          {availableTabs.map(([tab, label]) => (
             <button key={tab} onClick={() => setActiveTab(tab)}
               className="text-sm font-medium px-4 py-2 border-b-2 transition-colors"
               style={{
