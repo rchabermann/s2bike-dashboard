@@ -177,19 +177,23 @@ export function Dashboard({ data, leads, userRole, userName }: { data: Dashboard
             </div>
           </div>
         </div>
-        {/* Tabs */}
-        <div className="max-w-7xl mx-auto px-6 flex gap-1">
-          {availableTabs.map(([tab, label]) => (
-            <button key={tab} onClick={() => setActiveTab(tab)}
-              className="text-sm font-medium px-4 py-2 border-b-2 transition-colors"
-              style={{
-                borderColor: activeTab === tab ? "var(--accent-blue)" : "transparent",
-                color: activeTab === tab ? "var(--accent-blue)" : "var(--text-muted)",
-                background: "transparent", cursor: "pointer",
-              }}>
-              {label}
-            </button>
-          ))}
+        {/* Tabs — prominent pill navigation */}
+        <div className="max-w-7xl mx-auto px-6 py-3">
+          <div className="flex gap-2">
+            {availableTabs.map(([tab, label]) => (
+              <button key={tab} onClick={() => setActiveTab(tab)}
+                className="text-sm font-semibold px-5 py-2 rounded-full transition-all"
+                style={{
+                  background: activeTab === tab ? "var(--accent-blue)" : "var(--bg-card)",
+                  color: activeTab === tab ? "#fff" : "var(--text-secondary)",
+                  border: `1px solid ${activeTab === tab ? "var(--accent-blue)" : "var(--border-bright)"}`,
+                  cursor: "pointer",
+                  boxShadow: activeTab === tab ? "0 0 16px rgba(79,142,247,0.3)" : "none",
+                }}>
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       </header>
 

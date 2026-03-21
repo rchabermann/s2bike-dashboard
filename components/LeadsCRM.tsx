@@ -1,7 +1,7 @@
 "use client";
 import { useState, useMemo } from "react";
 import { LeadRow } from "@/lib/leads";
-import { format, parseISO } from "date-fns";
+import { format, parseISO, subDays } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 
@@ -22,6 +22,15 @@ function fmtDate(d: string) {
 function fmtBRL(n: number) {
   return n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+function todayStr() { return new Date().toISOString().slice(0, 10); }
+function daysAgoStr(n: number) { return subDays(new Date(), n).toISOString().slice(0, 10); }
+
+const DATE_PRESETS = [
+  { label: "7 dias",  getValue: () => ({ start: daysAgoStr(7),  end: todayStr() }) },
+  { label: "14 dias", getValue: () => ({ start: daysAgoStr(14), end: todayStr() }) },
+  { label: "30 dias", getValue: () => ({ start: daysAgoStr(30), end: todayStr() }) },
+  { label: "Total",   getValue: null },
+];
 
 type CRMTab = "funil" | "vendas" | "lista";
 
@@ -31,29 +40,54 @@ export function LeadsCRM({ leads }: { leads: LeadRow[] }) {
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [potentialFilter, setPotentialFilter] = useState<string[]>([]);
 
+  // Date filter state
+  const allDates = useMemo(() => leads.map(l => l.date).filter(Boolean).sort(), [leads]);
+  const minDate = allDates[0] ?? todayStr();
+  const maxDate = allDates[allDates.length - 1] ?? todayStr();
+  const [startDate, setStartDate] = useState(minDate);
+  const [endDate, setEndDate] = useState(maxDate);
+  const [activePreset, setActivePreset] = useState<string | null>("Total");
+
+  const applyPreset = (label: string, getValue: (() => { start: string; end: string }) | null) => {
+    setActivePreset(label);
+    if (getValue) {
+      const { start, end } = getValue();
+      setStartDate(start < minDate ? minDate : start);
+      setEndDate(end);
+    } else {
+      setStartDate(minDate);
+      setEndDate(maxDate);
+    }
+  };
+
   const allStatuses = useMemo(() => Array.from(new Set(leads.map(l => l.status).filter(Boolean))).sort(), [leads]);
 
   const toggleFilter = (val: string, arr: string[], setArr: (v: string[]) => void) => {
     setArr(arr.includes(val) ? arr.filter(x => x !== val) : [...arr, val]);
   };
 
+  // Apply date filter first, then status/potential/search
+  const dateFiltered = useMemo(() =>
+    leads.filter(l => l.date >= startDate && l.date <= endDate),
+    [leads, startDate, endDate]
+  );
+
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return leads.filter(l => {
+    return dateFiltered.filter(l => {
       const matchSearch = !q || l.name.toLowerCase().includes(q) || l.phone.toLowerCase().includes(q) || l.bikeInterest.toLowerCase().includes(q) || l.notes.toLowerCase().includes(q);
       const matchStatus = statusFilter.length === 0 || statusFilter.includes(l.status);
       const matchPotential = potentialFilter.length === 0 || potentialFilter.includes(l.potential);
       return matchSearch && matchStatus && matchPotential;
     });
-  }, [leads, search, statusFilter, potentialFilter]);
+  }, [dateFiltered, search, statusFilter, potentialFilter]);
 
-  // Sales metrics
-  const salesLeads = useMemo(() => leads.filter(l => l.status === "Venda"), [leads]);
+  const salesLeads = useMemo(() => dateFiltered.filter(l => l.status === "Venda"), [dateFiltered]);
   const totalRevenue = useMemo(() => salesLeads.reduce((s, l) => s + l.saleValue, 0), [salesLeads]);
-  const avgTicket = salesLeads.length > 0 ? totalRevenue / salesLeads.filter(l => l.saleValue > 0).length : 0;
-  const convRate = leads.length > 0 ? (salesLeads.length / leads.length * 100) : 0;
+  const avgTicket = salesLeads.filter(l => l.saleValue > 0).length > 0
+    ? totalRevenue / salesLeads.filter(l => l.saleValue > 0).length : 0;
+  const convRate = dateFiltered.length > 0 ? (salesLeads.length / dateFiltered.length * 100) : 0;
 
-  // Sales by bike
   const salesByBike = useMemo(() => {
     const map = new Map<string, { count: number; revenue: number }>();
     for (const l of salesLeads) {
@@ -64,16 +98,14 @@ export function LeadsCRM({ leads }: { leads: LeadRow[] }) {
     }
     return Array.from(map.entries())
       .map(([name, v]) => ({ name: name.length > 20 ? name.slice(0, 20) + "…" : name, ...v }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 8);
+      .sort((a, b) => b.count - a.count).slice(0, 8);
   }, [salesLeads]);
 
-  // Funil
   const funilData = [
-    { label: "Total de Leads", value: leads.length, color: "#4f8ef7" },
-    { label: "Quentes", value: leads.filter(l => l.potential === "Quente").length, color: "#ef4444" },
-    { label: "Negociando", value: leads.filter(l => l.status === "Negociando").length, color: "#f97316" },
-    { label: "Vendas", value: salesLeads.length, color: "#22c55e" },
+    { label: "Total de Leads", value: dateFiltered.length, color: "#4f8ef7" },
+    { label: "Quentes",        value: dateFiltered.filter(l => l.potential === "Quente").length, color: "#ef4444" },
+    { label: "Negociando",     value: dateFiltered.filter(l => l.status === "Negociando").length, color: "#f97316" },
+    { label: "Vendas",         value: salesLeads.length, color: "#22c55e" },
   ];
 
   const CRMTabs: [CRMTab, string][] = [["funil", "Funil"], ["vendas", "Vendas"], ["lista", "Lista"]];
@@ -82,13 +114,59 @@ export function LeadsCRM({ leads }: { leads: LeadRow[] }) {
     <section className="space-y-4">
       <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>CRM — Controle de Leads</p>
 
+      {/* Date filter */}
+      <div className="card p-5 animate-in stagger-1">
+        <div className="flex flex-wrap items-end gap-6">
+          {/* Presets */}
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: "var(--text-muted)" }}>Período</p>
+            <div className="flex gap-2">
+              {DATE_PRESETS.map(({ label, getValue }) => (
+                <button key={label} onClick={() => applyPreset(label, getValue)}
+                  className="mono text-xs px-3 py-1.5 rounded-lg transition-all"
+                  style={{
+                    border: `1px solid ${activePreset === label ? "var(--accent-blue)" : "var(--border-bright)"}`,
+                    background: activePreset === label ? "rgba(79,142,247,0.15)" : "transparent",
+                    color: activePreset === label ? "var(--accent-blue)" : "var(--text-secondary)",
+                    cursor: "pointer",
+                  }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Custom range */}
+          <div className="flex items-end gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: "var(--text-muted)" }}>De</p>
+              <input type="date" value={startDate} min={minDate} max={endDate}
+                onChange={e => { setStartDate(e.target.value); setActivePreset(null); }}
+                className="mono text-sm px-3 py-2 rounded-lg outline-none"
+                style={{ background: "var(--bg)", border: "1px solid var(--border-bright)", color: "var(--text-primary)", colorScheme: "dark" }} />
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: "var(--text-muted)" }}>Até</p>
+              <input type="date" value={endDate} min={startDate} max={maxDate}
+                onChange={e => { setEndDate(e.target.value); setActivePreset(null); }}
+                className="mono text-sm px-3 py-2 rounded-lg outline-none"
+                style={{ background: "var(--bg)", border: "1px solid var(--border-bright)", color: "var(--text-primary)", colorScheme: "dark" }} />
+            </div>
+          </div>
+
+          <p className="mono text-xs self-end pb-2" style={{ color: "var(--accent-blue)" }}>
+            {dateFiltered.length} lead{dateFiltered.length !== 1 ? "s" : ""} no período
+          </p>
+        </div>
+      </div>
+
       {/* KPIs */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: "Total de Leads", value: leads.length, color: "var(--accent-blue)", icon: "👥" },
-          { label: "Vendas Realizadas", value: salesLeads.length, color: "#22c55e", icon: "✅" },
-          { label: "Receita Total", value: totalRevenue > 0 ? `R$ ${fmtBRL(totalRevenue)}` : "—", color: "var(--accent-green)", icon: "💰" },
-          { label: "Ticket Médio", value: avgTicket > 0 ? `R$ ${fmtBRL(avgTicket)}` : "—", color: "var(--accent-purple)", icon: "🎯" },
+          { label: "Total de Leads",   value: dateFiltered.length,                                  color: "var(--accent-blue)",   icon: "👥" },
+          { label: "Vendas Realizadas",value: salesLeads.length,                                    color: "#22c55e",              icon: "✅" },
+          { label: "Receita Total",    value: totalRevenue > 0 ? `R$ ${fmtBRL(totalRevenue)}` : "—", color: "var(--accent-green)", icon: "💰" },
+          { label: "Ticket Médio",     value: avgTicket > 0 ? `R$ ${fmtBRL(avgTicket)}` : "—",      color: "var(--accent-purple)", icon: "🎯" },
         ].map((k) => (
           <div key={k.label} className="card p-4 relative overflow-hidden animate-in stagger-1">
             <div className="absolute -top-6 -right-6 w-16 h-16 rounded-full opacity-10 blur-xl" style={{ backgroundColor: k.color }} />
@@ -97,7 +175,7 @@ export function LeadsCRM({ leads }: { leads: LeadRow[] }) {
               <div className="w-2 h-2 rounded-full" style={{ backgroundColor: k.color }} />
             </div>
             <p className="text-xs font-medium uppercase tracking-widest mb-1" style={{ color: "var(--text-secondary)" }}>{k.label}</p>
-            <p className="mono text-xl font-medium" style={{ color: k.color }}>{typeof k.value === "number" ? k.value : k.value}</p>
+            <p className="mono text-xl font-medium" style={{ color: k.color }}>{k.value}</p>
           </div>
         ))}
       </div>
@@ -116,7 +194,6 @@ export function LeadsCRM({ leads }: { leads: LeadRow[] }) {
       {/* FUNIL */}
       {crmTab === "funil" && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {/* Visual funnel */}
           <div className="card p-6">
             <h3 className="text-sm font-semibold uppercase tracking-widest mb-6" style={{ color: "var(--text-secondary)" }}>Funil de Conversão</h3>
             <div className="space-y-3">
@@ -133,9 +210,7 @@ export function LeadsCRM({ leads }: { leads: LeadRow[] }) {
                       </div>
                     </div>
                     <div className="flex justify-center">
-                      <div className="h-8 rounded-md flex items-center justify-center transition-all"
-                        style={{ width: `${width}%`, background: `${item.color}33`, border: `1px solid ${item.color}66` }}>
-                      </div>
+                      <div className="h-8 rounded-md" style={{ width: `${width}%`, background: `${item.color}33`, border: `1px solid ${item.color}66` }} />
                     </div>
                   </div>
                 );
@@ -148,14 +223,12 @@ export function LeadsCRM({ leads }: { leads: LeadRow[] }) {
               </div>
             </div>
           </div>
-
-          {/* Status breakdown */}
           <div className="card p-6">
             <h3 className="text-sm font-semibold uppercase tracking-widest mb-6" style={{ color: "var(--text-secondary)" }}>Status dos Leads</h3>
             <div className="space-y-3">
               {allStatuses.map(status => {
-                const count = leads.filter(l => l.status === status).length;
-                const pct = leads.length > 0 ? (count / leads.length) * 100 : 0;
+                const count = dateFiltered.filter(l => l.status === status).length;
+                const pct = dateFiltered.length > 0 ? (count / dateFiltered.length) * 100 : 0;
                 const color = STATUS_COLORS[status] ?? "#7a94b0";
                 return (
                   <div key={status}>
@@ -167,7 +240,7 @@ export function LeadsCRM({ leads }: { leads: LeadRow[] }) {
                       </div>
                     </div>
                     <div className="h-2 rounded-full w-full" style={{ background: "var(--border)" }}>
-                      <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: color }} />
+                      <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: color }} />
                     </div>
                   </div>
                 );
@@ -198,8 +271,6 @@ export function LeadsCRM({ leads }: { leads: LeadRow[] }) {
               </ResponsiveContainer>
             </div>
           )}
-
-          {/* Sales list */}
           <div className="card overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -211,7 +282,7 @@ export function LeadsCRM({ leads }: { leads: LeadRow[] }) {
               </thead>
               <tbody>
                 {salesLeads.length === 0 ? (
-                  <tr><td colSpan={5} className="py-8 text-center" style={{ color: "var(--text-muted)" }}>Nenhuma venda registrada</td></tr>
+                  <tr><td colSpan={5} className="py-8 text-center" style={{ color: "var(--text-muted)" }}>Nenhuma venda no período</td></tr>
                 ) : salesLeads.map((lead, i) => (
                   <tr key={i} style={{ borderBottom: "1px solid var(--border)" }} className="transition-colors hover:bg-[#141d2e]">
                     <td className="mono py-3 px-4 text-xs" style={{ color: "var(--text-muted)" }}>{fmtDate(lead.date)}</td>
