@@ -60,7 +60,8 @@ export interface DashboardData {
   dateRange: { start: string; end: string };
 }
 
-const SHEET_ID = "1Rl3EfTIVs1WbGPQfY-RbNUZiGhgG9mawkhpX3Bf2omU";
+const SHEET_ID = process.env.DASHBOARD_SHEET_ID;
+if (!SHEET_ID) throw new Error("DASHBOARD_SHEET_ID env var not set");
 const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=0`;
 
 function parseBR(val: string): number {

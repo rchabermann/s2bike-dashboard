@@ -14,9 +14,10 @@ export interface LeadRow {
   conclusion: string;
 }
 
-const LEADS_SHEET_ID = "1oJx-hWRGL-SlbpYqT_1MR_fIvAxZHpPiezkAO28Y1cc";
+const LEADS_SHEET_ID = process.env.LEADS_SHEET_ID;
+if (!LEADS_SHEET_ID) throw new Error("LEADS_SHEET_ID env var not set");
 
-const TAB_GIDS = ["682545657", "953690557"]; // Fev26, Mar26
+const TAB_GIDS = ["682545657", "953690557", "1628718609"]; // Fev26, Mar26, Abr26
 
 function parseDate(val: string): string {
   if (!val || val.trim() === "") return "";
