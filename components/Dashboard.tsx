@@ -7,6 +7,8 @@ import { SpendChart } from "@/components/SpendChart";
 import { ConversationsChart } from "@/components/ConversationsChart";
 import { AdPerformanceTable } from "@/components/AdPerformanceTable";
 import { CPMChart } from "@/components/CPMChart";
+import { PlacementsChart } from "@/components/PlacementsChart";
+import { DemographicsChart } from "@/components/DemographicsChart";
 import { LeadsCRM } from "@/components/LeadsCRM";
 import { format, parseISO, subDays } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -44,7 +46,7 @@ const AD_COLORS: Record<string, string> = {
 type Tab = "ads" | "leads";
 
 export function Dashboard({ data, leads, userRole, userName }: { data: DashboardData; leads: LeadRow[]; userRole: string; userName: string }) {
-  const { rows, daily, byAd, dateRange, lastUpdated } = data;
+  const { rows, daily, byAd, dateRange, lastUpdated, summary, placements, demographics } = data;
 
   const [activeTab, setActiveTab] = useState<Tab>("ads");
   const isAdmin = userRole === "admin";
@@ -100,16 +102,27 @@ export function Dashboard({ data, leads, userRole, userName }: { data: Dashboard
         d.reach += row.reach;
         d.linkClicks += row.linkClicks;
         d.messagingConversations += row.messagingConversations;
-        d.frequency += row.frequency;
+        d.videoViews3s += row.videoViews3s;
+        d.thruPlay += row.thruPlay;
       } else {
-        dayMap.set(row.day, { day: row.day, amountSpent: row.amountSpent, impressions: row.impressions, reach: row.reach, linkClicks: row.linkClicks, messagingConversations: row.messagingConversations, frequency: row.frequency, cpm: 0, ctr: 0, cpc: 0 });
+        dayMap.set(row.day, {
+          day: row.day,
+          amountSpent: row.amountSpent,
+          impressions: row.impressions,
+          reach: row.reach,
+          linkClicks: row.linkClicks,
+          messagingConversations: row.messagingConversations,
+          videoViews3s: row.videoViews3s,
+          thruPlay: row.thruPlay,
+          frequency: 0, cpm: 0, ctr: 0, cpc: 0,
+        });
       }
     }
     return Array.from(dayMap.values())
       .sort((a, b) => a.day.localeCompare(b.day))
       .map(d => ({
         ...d,
-        frequency: d.impressions > 0 && d.reach > 0 ? d.impressions / d.reach : 0,
+        frequency: d.reach > 0 ? d.impressions / d.reach : 0,
         cpm: d.impressions > 0 ? (d.amountSpent / d.impressions) * 1000 : 0,
         ctr: d.impressions > 0 ? (d.linkClicks / d.impressions) * 100 : 0,
         cpc: d.linkClicks > 0 ? d.amountSpent / d.linkClicks : 0,
@@ -120,27 +133,76 @@ export function Dashboard({ data, leads, userRole, userName }: { data: Dashboard
     const adMap = new Map<string, AdPerformance>();
     for (const row of filteredRows) {
       const a = adMap.get(row.adName);
-      if (a) { a.amountSpent += row.amountSpent; a.impressions += row.impressions; a.reach += row.reach; a.linkClicks += row.linkClicks; a.messagingConversations += row.messagingConversations; }
-      else adMap.set(row.adName, { adName: row.adName, amountSpent: row.amountSpent, impressions: row.impressions, reach: row.reach, linkClicks: row.linkClicks, messagingConversations: row.messagingConversations, avgCpc: 0, avgCpm: 0, avgCtr: 0 });
+      if (a) {
+        a.amountSpent += row.amountSpent;
+        a.impressions += row.impressions;
+        a.reach += row.reach;
+        a.linkClicks += row.linkClicks;
+        a.messagingConversations += row.messagingConversations;
+        a.reactions += row.reactions;
+        a.comments += row.comments;
+        a.shares += row.shares;
+        a.videoViews3s += row.videoViews3s;
+        a.thruPlay += row.thruPlay;
+      } else {
+        adMap.set(row.adName, {
+          adName: row.adName,
+          amountSpent: row.amountSpent,
+          impressions: row.impressions,
+          reach: row.reach,
+          linkClicks: row.linkClicks,
+          messagingConversations: row.messagingConversations,
+          reactions: row.reactions,
+          comments: row.comments,
+          shares: row.shares,
+          videoViews3s: row.videoViews3s,
+          thruPlay: row.thruPlay,
+          avgCpc: 0, avgCpm: 0, avgCtr: 0,
+        });
+      }
     }
     return Array.from(adMap.values())
-      .map(a => ({ ...a, avgCpm: a.impressions > 0 ? (a.amountSpent / a.impressions) * 1000 : 0, avgCtr: a.impressions > 0 ? (a.linkClicks / a.impressions) * 100 : 0, avgCpc: a.linkClicks > 0 ? a.amountSpent / a.linkClicks : 0 }))
+      .map(a => ({
+        ...a,
+        avgCpm: a.impressions > 0 ? (a.amountSpent / a.impressions) * 1000 : 0,
+        avgCtr: a.impressions > 0 ? (a.linkClicks / a.impressions) * 100 : 0,
+        avgCpc: a.linkClicks > 0 ? a.amountSpent / a.linkClicks : 0,
+      }))
       .sort((a, b) => b.amountSpent - a.amountSpent);
   }, [filteredRows]);
+
+  // Alcance e frequência reais (da aba Resumo) para presets de 7/14/30 dias sem filtro de anúncio.
+  // Somar alcance dia a dia gera número incorreto pois uma mesma pessoa pode aparecer em múltiplos dias.
+  const summaryKey = activePreset === "7 dias" ? "7" : activePreset === "14 dias" ? "14" : activePreset === "30 dias" ? "30" : null;
+  const useRealReach = summaryKey !== null && selectedAds.length === 0;
 
   const totals = useMemo(() => {
     const s = filteredRows.reduce((acc, r) => acc + r.amountSpent, 0);
     const imp = filteredRows.reduce((acc, r) => acc + r.impressions, 0);
-    const reach = filteredDaily.reduce((acc, d) => acc + d.reach, 0);
     const clicks = filteredRows.reduce((acc, r) => acc + r.linkClicks, 0);
     const convs = filteredRows.reduce((acc, r) => acc + r.messagingConversations, 0);
+    const videoViews = filteredRows.reduce((acc, r) => acc + r.videoViews3s, 0);
+    const thruPlay = filteredRows.reduce((acc, r) => acc + r.thruPlay, 0);
+    const reactions = filteredRows.reduce((acc, r) => acc + r.reactions, 0);
+    const comments = filteredRows.reduce((acc, r) => acc + r.comments, 0);
+    const shares = filteredRows.reduce((acc, r) => acc + r.shares, 0);
+
+    const reach = useRealReach && summaryKey
+      ? summary[summaryKey].reach
+      : filteredDaily.reduce((acc, d) => acc + d.reach, 0);
+    const frequency = useRealReach && summaryKey
+      ? summary[summaryKey].frequency
+      : (imp > 0 && reach > 0 ? imp / reach : 0);
+
     return {
-      amountSpent: s, impressions: imp, reach, linkClicks: clicks, messagingConversations: convs,
+      amountSpent: s, impressions: imp, reach, frequency, linkClicks: clicks,
+      messagingConversations: convs, videoViews3s: videoViews, thruPlay, reactions, comments, shares,
       avgCpl: convs > 0 ? s / convs : 0,
       avgCtr: imp > 0 ? (clicks / imp) * 100 : 0,
       avgCpc: clicks > 0 ? s / clicks : 0,
+      avgCpm: imp > 0 ? (s / imp) * 1000 : 0,
     };
-  }, [filteredRows, filteredDaily]);
+  }, [filteredRows, filteredDaily, useRealReach, summaryKey, summary]);
 
   return (
     <main className="min-h-screen grid-bg" style={{ background: "var(--bg)" }}>
@@ -177,7 +239,7 @@ export function Dashboard({ data, leads, userRole, userName }: { data: Dashboard
             </div>
           </div>
         </div>
-        {/* Tabs — prominent pill navigation */}
+        {/* Tabs */}
         <div className="max-w-7xl mx-auto px-6 py-3">
           <div className="flex gap-2">
             {availableTabs.map(([tab, label]) => (
@@ -202,10 +264,9 @@ export function Dashboard({ data, leads, userRole, userName }: { data: Dashboard
           <LeadsCRM leads={leads} />
         ) : (
           <>
-            {/* Filters */}
+            {/* Filtros */}
             <section className="card p-5 animate-in stagger-1">
               <div className="flex flex-wrap items-end gap-6">
-                {/* Preset buttons */}
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: "var(--text-muted)" }}>Período</p>
                   <div className="flex gap-2">
@@ -224,7 +285,6 @@ export function Dashboard({ data, leads, userRole, userName }: { data: Dashboard
                   </div>
                 </div>
 
-                {/* Custom date range */}
                 <div className="flex items-end gap-3">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: "var(--text-muted)" }}>De</p>
@@ -242,7 +302,6 @@ export function Dashboard({ data, leads, userRole, userName }: { data: Dashboard
                   </div>
                 </div>
 
-                {/* Ad filter */}
                 <div className="flex-1 min-w-[200px]">
                   <p className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: "var(--text-muted)" }}>Anúncios</p>
                   <div className="flex flex-wrap gap-2">
@@ -275,29 +334,73 @@ export function Dashboard({ data, leads, userRole, userName }: { data: Dashboard
                   {" "}· {filteredRows.length} linha{filteredRows.length !== 1 ? "s" : ""}
                 </p>
               )}
+
+              {useRealReach && (
+                <p className="mono text-xs mt-2" style={{ color: "var(--accent-teal)" }}>
+                  ✓ Alcance e frequência calculados pelo Meta para o período exato ({summary[summaryKey!].period})
+                </p>
+              )}
             </section>
 
-            {/* KPIs */}
+            {/* KPIs — linha 1: volume */}
             <section>
               <p className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: "var(--text-muted)" }}>Resumo do Período</p>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <KPICard label="Total Investido" value={`R$ ${fmtBRL(totals.amountSpent)}`} icon="💸" accentColor="var(--accent-orange)" stagger={2} />
                 <KPICard label="Impressões" value={totals.impressions.toLocaleString("pt-BR")} icon="👁️" accentColor="var(--accent-blue)" stagger={3} />
-                <KPICard label="Alcance" value={totals.reach.toLocaleString("pt-BR")} icon="📡" accentColor="var(--accent-purple)" stagger={4} />
-                <KPICard label="Cliques no Link" value={totals.linkClicks.toLocaleString("pt-BR")} subvalue={`CTR médio: ${totals.avgCtr.toFixed(2)}%`} icon="🖱️" accentColor="var(--accent-teal)" stagger={5} />
-                <KPICard label="Conversas WhatsApp" value={totals.messagingConversations.toLocaleString("pt-BR")} icon="💬" accentColor="var(--accent-green)" stagger={5} />
-                <KPICard label="CPL Médio" value={totals.avgCpl > 0 ? `R$ ${fmtBRL(totals.avgCpl)}` : "—"} subvalue="investimento / conversas" icon="📊" accentColor="var(--accent-purple)" stagger={6} />
-                <KPICard label="CPC Médio" value={totals.avgCpc > 0 ? `R$ ${fmtBRL(totals.avgCpc)}` : "—"} icon="🎯" accentColor="var(--accent-teal)" stagger={7} />
-                <KPICard label="Anúncios" value={String(filteredByAd.length)} icon="📣" accentColor="var(--accent-orange)" stagger={8} />
+                <KPICard
+                  label="Alcance"
+                  value={totals.reach.toLocaleString("pt-BR")}
+                  subvalue={useRealReach ? "✓ real (Meta)" : "estimado (soma diária)"}
+                  icon="📡"
+                  accentColor="var(--accent-purple)"
+                  stagger={4}
+                />
+                <KPICard
+                  label="Frequência"
+                  value={totals.frequency.toFixed(2)}
+                  subvalue={useRealReach ? "✓ real (Meta)" : "estimada"}
+                  icon="🔁"
+                  accentColor="var(--accent-teal)"
+                  stagger={5}
+                />
               </div>
             </section>
 
-            {/* Charts */}
+            {/* KPIs — linha 2: engajamento */}
+            <section>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <KPICard label="Cliques no Link" value={totals.linkClicks.toLocaleString("pt-BR")} subvalue={`CTR: ${totals.avgCtr.toFixed(2)}%`} icon="🖱️" accentColor="var(--accent-teal)" stagger={6} />
+                <KPICard label="Conversas WhatsApp" value={totals.messagingConversations.toLocaleString("pt-BR")} icon="💬" accentColor="var(--accent-green)" stagger={7} />
+                <KPICard label="CPL Médio" value={totals.avgCpl > 0 ? `R$ ${fmtBRL(totals.avgCpl)}` : "—"} subvalue="investimento / conversas" icon="📊" accentColor="var(--accent-purple)" stagger={8} />
+                <KPICard label="CPM Médio" value={totals.avgCpm > 0 ? `R$ ${fmtBRL(totals.avgCpm)}` : "—"} icon="🎯" accentColor="var(--accent-orange)" stagger={9} />
+              </div>
+            </section>
+
+            {/* KPIs — linha 3: vídeo + engajamento */}
+            <section>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <KPICard label="Videoviews 3s" value={totals.videoViews3s.toLocaleString("pt-BR")} icon="▶️" accentColor="var(--accent-blue)" stagger={10} />
+                <KPICard label="ThruPlay" value={totals.thruPlay.toLocaleString("pt-BR")} subvalue={totals.videoViews3s > 0 ? `${((totals.thruPlay / totals.videoViews3s) * 100).toFixed(1)}% completaram` : undefined} icon="✅" accentColor="var(--accent-green)" stagger={11} />
+                <KPICard label="Engajamento" value={(totals.reactions + totals.comments + totals.shares).toLocaleString("pt-BR")} subvalue={`${totals.reactions} reações · ${totals.comments} comentários · ${totals.shares} compartilhamentos`} icon="❤️" accentColor="var(--accent-purple)" stagger={12} />
+                <KPICard label="Anúncios" value={String(filteredByAd.length)} icon="📣" accentColor="var(--accent-orange)" stagger={13} />
+              </div>
+            </section>
+
+            {/* Charts temporais */}
             <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <SpendChart data={filteredDaily} />
               <ConversationsChart data={filteredDaily} />
             </section>
             <section><CPMChart data={filteredDaily} /></section>
+
+            {/* Breakdowns */}
+            <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <PlacementsChart data={placements} />
+              <DemographicsChart data={demographics} />
+            </section>
+
+            {/* Tabela por anúncio */}
             <section><AdPerformanceTable data={filteredByAd} totalSpent={totals.amountSpent} /></section>
           </>
         )}

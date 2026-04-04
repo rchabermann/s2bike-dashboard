@@ -10,11 +10,17 @@ export interface AdRow {
   ctr: number;
   cpc: number;
   messagingConversations: number;
-  costPerConversation: number;
+  costPerResult: number;
   campaignName: string;
   adSetName: string;
   adName: string;
   day: string;
+  engPost: number;
+  reactions: number;
+  comments: number;
+  shares: number;
+  videoViews3s: number;
+  thruPlay: number;
 }
 
 export interface DailyMetrics {
@@ -28,6 +34,8 @@ export interface DailyMetrics {
   cpm: number;
   ctr: number;
   cpc: number;
+  videoViews3s: number;
+  thruPlay: number;
 }
 
 export interface AdPerformance {
@@ -40,6 +48,57 @@ export interface AdPerformance {
   avgCpc: number;
   avgCpm: number;
   avgCtr: number;
+  reactions: number;
+  comments: number;
+  shares: number;
+  videoViews3s: number;
+  thruPlay: number;
+}
+
+export interface PeriodSummary {
+  period: string;
+  investment: number;
+  impressions: number;
+  reach: number;
+  frequency: number;
+  linkClicks: number;
+  ctr: number;
+  cpm: number;
+  cpc: number;
+  results: number;
+  costPerResult: number;
+  waConversations: number;
+  cplWhatsapp: number;
+  videoViews3s: number;
+  thruPlay: number;
+}
+
+export interface PlacementRow {
+  platform: string;
+  placement: string;
+  amountSpent: number;
+  impressions: number;
+  reach: number;
+  linkClicks: number;
+  ctr: number;
+  cpm: number;
+  cpc: number;
+  results: number;
+  waConversations: number;
+  videoViews3s: number;
+}
+
+export interface DemographicRow {
+  ageRange: string;
+  gender: string;
+  amountSpent: number;
+  impressions: number;
+  reach: number;
+  ctr: number;
+  cpm: number;
+  results: number;
+  waConversations: number;
+  videoViews3s: number;
 }
 
 export interface DashboardData {
@@ -56,75 +115,203 @@ export interface DashboardData {
     avgCtr: number;
     avgCpc: number;
   };
+  summary: { "7": PeriodSummary; "14": PeriodSummary; "30": PeriodSummary };
+  placements: PlacementRow[];
+  demographics: DemographicRow[];
   lastUpdated: string;
   dateRange: { start: string; end: string };
 }
 
 const SHEET_ID = process.env.DASHBOARD_SHEET_ID;
 if (!SHEET_ID) throw new Error("DASHBOARD_SHEET_ID env var not set");
-const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=0`;
+
+// Abas da nova planilha
+const GID_ANUNCIOS = "79328799";
+const GID_RESUMO = "1031874185";
+const GID_POSICIONAMENTOS = "726176718";
+const GID_DEMOGRAFICOS = "1162444530";
+
+function sheetUrl(gid: string) {
+  return `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`;
+}
 
 function parseBR(val: string): number {
   if (!val || val.trim() === "") return 0;
-  const s = val.trim();
-  // Brazilian: 1.234,56
+  const s = val.trim().replace(/%$/, "").trim();
+  if (s === "-" || s === "") return 0;
   if (s.includes(".") && s.includes(",")) {
     return parseFloat(s.replace(/\./g, "").replace(",", ".")) || 0;
   }
-  // Decimal comma only: 1,58
   if (s.includes(",")) {
     return parseFloat(s.replace(",", ".")) || 0;
   }
   return parseFloat(s) || 0;
 }
 
-export async function fetchDashboardData(): Promise<DashboardData> {
-  const res = await fetch(CSV_URL, { next: { revalidate: 3600 } });
-  if (!res.ok) throw new Error(`Failed to fetch sheet: ${res.status}`);
-
-  const text = await res.text();
-
-  // Detect delimiter: Google Sheets uses ; for pt-BR locale
-  const firstLine = text.split("\n")[0] ?? "";
-  const delimiter = firstLine.includes(";") ? ";" : ",";
-
-  const parsed = Papa.parse<string[]>(text, {
-    delimiter,
-    skipEmptyLines: true,
-  });
-
-  if (!parsed.data || parsed.data.length < 2) {
-    throw new Error("Planilha vazia ou nao pode ser lida.");
+async function fetchTabCSV(gid: string): Promise<string[][]> {
+  try {
+    const res = await fetch(sheetUrl(gid), { next: { revalidate: 3600 } });
+    if (!res.ok) return [];
+    const text = await res.text();
+    const firstLine = text.split("\n")[0] ?? "";
+    const delimiter = firstLine.includes(";") ? ";" : ",";
+    const parsed = Papa.parse<string[]>(text, { delimiter, skipEmptyLines: true });
+    return parsed.data ?? [];
+  } catch {
+    return [];
   }
+}
 
-  const dataRows = parsed.data.slice(1);
-
-  const rows: AdRow[] = dataRows
+// Colunas da aba Anúncios (gid=79328799):
+// 0=Data Início, 2=Campanha, 5=Conjunto, 7=Anúncio
+// 10=Investimento, 12=Impressões, 13=Alcance, 14=Frequência
+// 18=Cliques no Link, 23=CTR Total(%), 27=CPC, 28=CPM
+// 35=Resultados, 37=Custo/Resultado
+// 39=Eng.Post, 41=Reações, 42=Comentários, 43=Compartilhamentos
+// 47=Videoviews(3s), 50=ThruPlay
+// 60=Conversas WhatsApp(7d)
+function parseAnuncios(data: string[][]): AdRow[] {
+  return data
+    .slice(1)
     .map((cols): AdRow | null => {
-      if (!cols || cols.length < 14) return null;
-      const day = String(cols[13] ?? "").replace(/"/g, "").trim();
+      if (!cols || cols.length < 10) return null;
+      const day = String(cols[0] ?? "").trim();
       if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
-      const impressions = parseBR(String(cols[1]));
+      const impressions = parseBR(String(cols[12]));
       if (impressions === 0) return null;
       return {
-        reach: parseBR(String(cols[0])),
-        impressions,
-        frequency: parseBR(String(cols[2])),
-        amountSpent: parseBR(String(cols[3])),
-        cpm: parseBR(String(cols[4])),
-        linkClicks: parseBR(String(cols[5])),
-        ctr: parseBR(String(cols[6])),
-        cpc: parseBR(String(cols[7])),
-        messagingConversations: parseBR(String(cols[8])),
-        costPerConversation: parseBR(String(cols[9])),
-        campaignName: String(cols[10] ?? "").replace(/"/g, "").trim(),
-        adSetName: String(cols[11] ?? "").replace(/"/g, "").trim(),
-        adName: String(cols[12] ?? "").replace(/"/g, "").trim(),
         day,
+        campaignName: String(cols[2] ?? "").trim(),
+        adSetName: String(cols[5] ?? "").trim(),
+        adName: String(cols[7] ?? "").trim(),
+        amountSpent: parseBR(String(cols[10])),
+        impressions,
+        reach: parseBR(String(cols[13])),
+        frequency: parseBR(String(cols[14])),
+        linkClicks: parseBR(String(cols[18])),
+        ctr: parseBR(String(cols[23])),
+        cpc: parseBR(String(cols[27])),
+        cpm: parseBR(String(cols[28])),
+        costPerResult: parseBR(String(cols[37])),
+        engPost: parseBR(String(cols[39])),
+        reactions: parseBR(String(cols[41])),
+        comments: parseBR(String(cols[42])),
+        shares: parseBR(String(cols[43])),
+        videoViews3s: parseBR(String(cols[47])),
+        thruPlay: parseBR(String(cols[50])),
+        messagingConversations: parseBR(String(cols[60])),
       };
     })
     .filter((r): r is AdRow => r !== null);
+}
 
+// Aba Resumo: linhas = métricas, colunas = janelas de tempo (7/14/30 dias)
+function parseResumo(data: string[][]): DashboardData["summary"] {
+  const rowMap = new Map<string, string[]>();
+  for (const row of data) {
+    if (row.length >= 2) {
+      const key = String(row[0] ?? "").trim();
+      if (key && !key.startsWith("──")) rowMap.set(key, row);
+    }
+  }
+
+  function get(name: string, col: number): number {
+    const row = rowMap.get(name);
+    if (!row) return 0;
+    return parseBR(String(row[col] ?? ""));
+  }
+
+  function makeSummary(col: number): PeriodSummary {
+    const periodRow = rowMap.get("Período");
+    return {
+      period: periodRow ? String(periodRow[col] ?? "") : "",
+      investment: get("Investimento (R$)", col),
+      impressions: get("Impressões", col),
+      reach: get("Alcance ✓ (real)", col),
+      frequency: get("Frequência ✓ (real)", col),
+      linkClicks: get("Cliques no Link", col),
+      ctr: get("CTR (%)", col),
+      cpm: get("CPM (R$)", col),
+      cpc: get("CPC (R$)", col),
+      results: get("Resultados", col),
+      costPerResult: get("Custo/Resultado(R$)", col),
+      waConversations: get("Conversas WhatsApp", col),
+      cplWhatsapp: get("CPL WhatsApp (R$)", col),
+      videoViews3s: get("Videoviews (3s)", col),
+      thruPlay: get("ThruPlay", col),
+    };
+  }
+
+  return { "7": makeSummary(1), "14": makeSummary(2), "30": makeSummary(3) };
+}
+
+// Colunas Posicionamentos / Demograficos (estrutura idêntica, apenas dim. cols diferentes):
+// 3=dim1, 4=dim2, 5=Investimento, 6=Impressões, 7=Alcance, 8=Frequência
+// 9=Cliques(Total), 10=Cliques no Link, 11=CTR, 12=CPC, 13=CPM
+// 14=Resultados, 23=Conversas WhatsApp, 26=Videoviews(3s)
+function parsePlacements(data: string[][]): PlacementRow[] {
+  return data
+    .slice(1)
+    .map((cols): PlacementRow | null => {
+      if (!cols || cols.length < 15) return null;
+      const platform = String(cols[3] ?? "").trim();
+      if (!platform) return null;
+      return {
+        platform,
+        placement: String(cols[4] ?? "").trim(),
+        amountSpent: parseBR(String(cols[5])),
+        impressions: parseBR(String(cols[6])),
+        reach: parseBR(String(cols[7])),
+        linkClicks: parseBR(String(cols[10])),
+        ctr: parseBR(String(cols[11])),
+        cpm: parseBR(String(cols[13])),
+        cpc: parseBR(String(cols[12])),
+        results: parseBR(String(cols[14])),
+        waConversations: parseBR(String(cols[23])),
+        videoViews3s: parseBR(String(cols[26])),
+      };
+    })
+    .filter((r): r is PlacementRow => r !== null);
+}
+
+function parseDemographics(data: string[][]): DemographicRow[] {
+  return data
+    .slice(1)
+    .map((cols): DemographicRow | null => {
+      if (!cols || cols.length < 15) return null;
+      const ageRange = String(cols[3] ?? "").trim();
+      if (!ageRange) return null;
+      return {
+        ageRange,
+        gender: String(cols[4] ?? "").trim(),
+        amountSpent: parseBR(String(cols[5])),
+        impressions: parseBR(String(cols[6])),
+        reach: parseBR(String(cols[7])),
+        ctr: parseBR(String(cols[11])),
+        cpm: parseBR(String(cols[13])),
+        results: parseBR(String(cols[14])),
+        waConversations: parseBR(String(cols[23])),
+        videoViews3s: parseBR(String(cols[26])),
+      };
+    })
+    .filter((r): r is DemographicRow => r !== null);
+}
+
+export async function fetchDashboardData(): Promise<DashboardData> {
+  const [anunciosData, resumoData, posicionamentosData, demograficosData] =
+    await Promise.all([
+      fetchTabCSV(GID_ANUNCIOS),
+      fetchTabCSV(GID_RESUMO),
+      fetchTabCSV(GID_POSICIONAMENTOS),
+      fetchTabCSV(GID_DEMOGRAFICOS),
+    ]);
+
+  const rows = parseAnuncios(anunciosData);
+  const summary = parseResumo(resumoData);
+  const placements = parsePlacements(posicionamentosData);
+  const demographics = parseDemographics(demograficosData);
+
+  // Métricas diárias
   const dayMap = new Map<string, DailyMetrics>();
   for (const row of rows) {
     const d = dayMap.get(row.day);
@@ -134,6 +321,8 @@ export async function fetchDashboardData(): Promise<DashboardData> {
       d.reach += row.reach;
       d.linkClicks += row.linkClicks;
       d.messagingConversations += row.messagingConversations;
+      d.videoViews3s += row.videoViews3s;
+      d.thruPlay += row.thruPlay;
     } else {
       dayMap.set(row.day, {
         day: row.day,
@@ -142,10 +331,9 @@ export async function fetchDashboardData(): Promise<DashboardData> {
         reach: row.reach,
         linkClicks: row.linkClicks,
         messagingConversations: row.messagingConversations,
-        frequency: row.frequency,
-        cpm: 0,
-        ctr: 0,
-        cpc: 0,
+        videoViews3s: row.videoViews3s,
+        thruPlay: row.thruPlay,
+        frequency: 0, cpm: 0, ctr: 0, cpc: 0,
       });
     }
   }
@@ -160,6 +348,7 @@ export async function fetchDashboardData(): Promise<DashboardData> {
       cpc: d.linkClicks > 0 ? d.amountSpent / d.linkClicks : 0,
     }));
 
+  // Performance por anúncio
   const adMap = new Map<string, AdPerformance>();
   for (const row of rows) {
     const a = adMap.get(row.adName);
@@ -169,6 +358,11 @@ export async function fetchDashboardData(): Promise<DashboardData> {
       a.reach += row.reach;
       a.linkClicks += row.linkClicks;
       a.messagingConversations += row.messagingConversations;
+      a.reactions += row.reactions;
+      a.comments += row.comments;
+      a.shares += row.shares;
+      a.videoViews3s += row.videoViews3s;
+      a.thruPlay += row.thruPlay;
     } else {
       adMap.set(row.adName, {
         adName: row.adName,
@@ -177,9 +371,12 @@ export async function fetchDashboardData(): Promise<DashboardData> {
         reach: row.reach,
         linkClicks: row.linkClicks,
         messagingConversations: row.messagingConversations,
-        avgCpc: 0,
-        avgCpm: 0,
-        avgCtr: 0,
+        reactions: row.reactions,
+        comments: row.comments,
+        shares: row.shares,
+        videoViews3s: row.videoViews3s,
+        thruPlay: row.thruPlay,
+        avgCpc: 0, avgCpm: 0, avgCtr: 0,
       });
     }
   }
@@ -214,10 +411,10 @@ export async function fetchDashboardData(): Promise<DashboardData> {
       avgCtr: totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0,
       avgCpc: totalClicks > 0 ? totalSpent / totalClicks : 0,
     },
+    summary,
+    placements,
+    demographics,
     lastUpdated: new Date().toISOString(),
-    dateRange: {
-      start: dates[0] ?? "",
-      end: dates[dates.length - 1] ?? "",
-    },
+    dateRange: { start: dates[0] ?? "", end: dates[dates.length - 1] ?? "" },
   };
 }

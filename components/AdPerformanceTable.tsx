@@ -39,7 +39,7 @@ export function AdPerformanceTable({ data, totalSpent }: Props) {
         <table className="w-full text-sm">
           <thead>
             <tr style={{ borderBottom: "1px solid var(--border)" }}>
-              {["Anúncio", "Gasto", "Share", "Impressões", "Alcance", "Cliques", "CTR", "CPC", "Conversas"].map(
+              {["Anúncio", "Gasto", "Share", "Impressões", "Alcance", "Cliques", "CTR", "CPC", "Conversas", "Videoviews 3s", "Engajamento"].map(
                 (h) => (
                   <th
                     key={h}
@@ -53,9 +53,10 @@ export function AdPerformanceTable({ data, totalSpent }: Props) {
             </tr>
           </thead>
           <tbody>
-            {data.map((ad, i) => {
+            {data.map((ad) => {
               const share = totalSpent > 0 ? (ad.amountSpent / totalSpent) * 100 : 0;
               const color = getColor(ad.adName);
+              const engagement = ad.reactions + ad.comments + ad.shares;
               return (
                 <tr
                   key={ad.adName}
@@ -106,6 +107,12 @@ export function AdPerformanceTable({ data, totalSpent }: Props) {
                   </td>
                   <td className="mono py-3 px-3" style={{ color: "#22c55e" }}>
                     {ad.messagingConversations || "—"}
+                  </td>
+                  <td className="mono py-3 px-3" style={{ color: "var(--accent-purple)" }}>
+                    {ad.videoViews3s ? ad.videoViews3s.toLocaleString("pt-BR") : "—"}
+                  </td>
+                  <td className="mono py-3 px-3" style={{ color: "var(--accent-teal)" }}>
+                    {engagement ? engagement.toLocaleString("pt-BR") : "—"}
                   </td>
                 </tr>
               );
