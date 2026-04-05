@@ -1,6 +1,6 @@
 "use client";
 import { useState, useMemo } from "react";
-import { DashboardData, DailyMetrics, AdPerformance } from "@/lib/sheets";
+import { DashboardData, DailyMetrics, AdPerformance, CampaignRow } from "@/lib/sheets";
 import { LeadRow } from "@/lib/leads";
 import { KPICard } from "@/components/KPICard";
 import { SpendChart } from "@/components/SpendChart";
@@ -46,7 +46,7 @@ const AD_COLORS: Record<string, string> = {
 type Tab = "ads" | "leads";
 
 export function Dashboard({ data, leads, userRole, userName }: { data: DashboardData; leads: LeadRow[]; userRole: string; userName: string }) {
-  const { rows, daily, byAd, dateRange, lastUpdated, summary, placements, demographics } = data;
+  const { rows, daily, byAd, dateRange, lastUpdated, summary, placements, demographics, campaignRows } = data;
 
   const [activeTab, setActiveTab] = useState<Tab>("ads");
   const isAdmin = userRole === "admin";
@@ -171,28 +171,45 @@ export function Dashboard({ data, leads, userRole, userName }: { data: Dashboard
       .sort((a, b) => b.amountSpent - a.amountSpent);
   }, [filteredRows]);
 
-  // Alcance e frequência reais (da aba Resumo) para presets de 7/14/30 dias sem filtro de anúncio.
-  // Somar alcance dia a dia gera número incorreto pois uma mesma pessoa pode aparecer em múltiplos dias.
+  // Fonte de dados para KPIs:
+  // - Sem filtro de anúncio → aba Campanhas (alcance deduplicado por campanha/dia)
+  // - Com filtro de anúncio → aba Anúncios (única granularidade disponível)
+  // - Presets 7/14/30 dias sem filtro → alcance e frequência da aba Resumo (deduplicado entre dias)
   const summaryKey = activePreset === "7 dias" ? "7" : activePreset === "14 dias" ? "14" : activePreset === "30 dias" ? "30" : null;
   const useRealReach = summaryKey !== null && selectedAds.length === 0;
 
-  const totals = useMemo(() => {
-    const s = filteredRows.reduce((acc, r) => acc + r.amountSpent, 0);
-    const imp = filteredRows.reduce((acc, r) => acc + r.impressions, 0);
-    const clicks = filteredRows.reduce((acc, r) => acc + r.linkClicks, 0);
-    const convs = filteredRows.reduce((acc, r) => acc + r.messagingConversations, 0);
-    const videoViews = filteredRows.reduce((acc, r) => acc + r.videoViews3s, 0);
-    const thruPlay = filteredRows.reduce((acc, r) => acc + r.thruPlay, 0);
-    const reactions = filteredRows.reduce((acc, r) => acc + r.reactions, 0);
-    const comments = filteredRows.reduce((acc, r) => acc + r.comments, 0);
-    const shares = filteredRows.reduce((acc, r) => acc + r.shares, 0);
+  const filteredCampaignRows = useMemo((): CampaignRow[] =>
+    campaignRows.filter(r => r.day >= startDate && r.day <= endDate),
+    [campaignRows, startDate, endDate]
+  );
 
-    const reach = useRealReach && summaryKey
-      ? summary[summaryKey].reach
-      : filteredDaily.reduce((acc, d) => acc + d.reach, 0);
-    const frequency = useRealReach && summaryKey
-      ? summary[summaryKey].frequency
-      : (imp > 0 && reach > 0 ? imp / reach : 0);
+  const totals = useMemo(() => {
+    const useCampaigns = selectedAds.length === 0;
+    const source = useCampaigns ? filteredCampaignRows : filteredRows;
+
+    const s = source.reduce((acc, r) => acc + r.amountSpent, 0);
+    const imp = source.reduce((acc, r) => acc + r.impressions, 0);
+    const clicks = source.reduce((acc, r) => acc + r.linkClicks, 0);
+    const convs = source.reduce((acc, r) => acc + r.messagingConversations, 0);
+    const videoViews = source.reduce((acc, r) => acc + r.videoViews3s, 0);
+    const thruPlay = source.reduce((acc, r) => acc + r.thruPlay, 0);
+    const reactions = source.reduce((acc, r) => acc + r.reactions, 0);
+    const comments = source.reduce((acc, r) => acc + r.comments, 0);
+    const shares = source.reduce((acc, r) => acc + r.shares, 0);
+
+    // Alcance: Resumo (mais preciso) > soma de Campanhas (deduplicado/dia) > soma de Anúncios (inflado)
+    let reach: number;
+    let frequency: number;
+    if (useRealReach && summaryKey) {
+      reach = summary[summaryKey].reach;
+      frequency = summary[summaryKey].frequency;
+    } else if (useCampaigns) {
+      reach = filteredCampaignRows.reduce((acc, r) => acc + r.reach, 0);
+      frequency = imp > 0 && reach > 0 ? imp / reach : 0;
+    } else {
+      reach = filteredDaily.reduce((acc, d) => acc + d.reach, 0);
+      frequency = imp > 0 && reach > 0 ? imp / reach : 0;
+    }
 
     return {
       amountSpent: s, impressions: imp, reach, frequency, linkClicks: clicks,
@@ -202,7 +219,7 @@ export function Dashboard({ data, leads, userRole, userName }: { data: Dashboard
       avgCpc: clicks > 0 ? s / clicks : 0,
       avgCpm: imp > 0 ? (s / imp) * 1000 : 0,
     };
-  }, [filteredRows, filteredDaily, useRealReach, summaryKey, summary]);
+  }, [filteredRows, filteredCampaignRows, filteredDaily, selectedAds.length, useRealReach, summaryKey, summary]);
 
   return (
     <main className="min-h-screen grid-bg" style={{ background: "var(--bg)" }}>
@@ -351,7 +368,7 @@ export function Dashboard({ data, leads, userRole, userName }: { data: Dashboard
                 <KPICard
                   label="Alcance"
                   value={totals.reach.toLocaleString("pt-BR")}
-                  subvalue={useRealReach ? "✓ real (Meta)" : "estimado (soma diária)"}
+                  subvalue={useRealReach ? "✓ real (Resumo)" : selectedAds.length === 0 ? "soma por campanha/dia" : "estimado (anúncios)"}
                   icon="📡"
                   accentColor="var(--accent-purple)"
                   stagger={4}
@@ -359,7 +376,7 @@ export function Dashboard({ data, leads, userRole, userName }: { data: Dashboard
                 <KPICard
                   label="Frequência"
                   value={totals.frequency.toFixed(2)}
-                  subvalue={useRealReach ? "✓ real (Meta)" : "estimada"}
+                  subvalue={useRealReach ? "✓ real (Resumo)" : selectedAds.length === 0 ? "média por campanha/dia" : "estimada"}
                   icon="🔁"
                   accentColor="var(--accent-teal)"
                   stagger={5}

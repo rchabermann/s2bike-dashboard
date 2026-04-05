@@ -1,5 +1,24 @@
 import Papa from "papaparse";
 
+// Linha por campanha por dia — alcance já deduplicado pelo Meta dentro do dia
+export interface CampaignRow {
+  day: string;
+  amountSpent: number;
+  impressions: number;
+  reach: number;
+  frequency: number;
+  linkClicks: number;
+  ctr: number;
+  cpc: number;
+  cpm: number;
+  messagingConversations: number;
+  videoViews3s: number;
+  thruPlay: number;
+  reactions: number;
+  comments: number;
+  shares: number;
+}
+
 export interface AdRow {
   reach: number;
   impressions: number;
@@ -115,6 +134,7 @@ export interface DashboardData {
     avgCtr: number;
     avgCpc: number;
   };
+  campaignRows: CampaignRow[];
   summary: { "7": PeriodSummary; "14": PeriodSummary; "30": PeriodSummary };
   placements: PlacementRow[];
   demographics: DemographicRow[];
@@ -125,7 +145,8 @@ export interface DashboardData {
 const SHEET_ID = process.env.DASHBOARD_SHEET_ID;
 if (!SHEET_ID) throw new Error("DASHBOARD_SHEET_ID env var not set");
 
-// Abas da nova planilha
+// Abas da planilha
+const GID_CAMPANHAS = "1598579207";
 const GID_ANUNCIOS = "79328799";
 const GID_RESUMO = "1031874185";
 const GID_POSICIONAMENTOS = "726176718";
@@ -160,6 +181,42 @@ async function fetchTabCSV(gid: string): Promise<string[][]> {
   } catch {
     return [];
   }
+}
+
+// Colunas da aba Campanhas (gid=1598579207) — sem separadores:
+// 0=Data Início, 2=Campanha, 4=Objetivo
+// 5=Investimento, 7=Impressões, 8=Alcance, 9=Frequência
+// 12=Cliques no Link, 17=CTR Total(%), 21=CPC, 22=CPM
+// 32=Reações, 33=Comentários, 34=Compartilhamentos
+// 37=Videoviews(3s), 40=ThruPlay, 49=Conversas WhatsApp(7d)
+function parseCampaigns(data: string[][]): CampaignRow[] {
+  return data
+    .slice(1)
+    .map((cols): CampaignRow | null => {
+      if (!cols || cols.length < 10) return null;
+      const day = String(cols[0] ?? "").trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+      const impressions = parseBR(String(cols[7]));
+      if (impressions === 0) return null;
+      return {
+        day,
+        amountSpent: parseBR(String(cols[5])),
+        impressions,
+        reach: parseBR(String(cols[8])),
+        frequency: parseBR(String(cols[9])),
+        linkClicks: parseBR(String(cols[12])),
+        ctr: parseBR(String(cols[17])),
+        cpc: parseBR(String(cols[21])),
+        cpm: parseBR(String(cols[22])),
+        reactions: parseBR(String(cols[32])),
+        comments: parseBR(String(cols[33])),
+        shares: parseBR(String(cols[34])),
+        videoViews3s: parseBR(String(cols[37])),
+        thruPlay: parseBR(String(cols[40])),
+        messagingConversations: parseBR(String(cols[49])),
+      };
+    })
+    .filter((r): r is CampaignRow => r !== null);
 }
 
 // Colunas da aba Anúncios (gid=79328799) — sem colunas separadoras:
@@ -308,14 +365,16 @@ function parseDemographics(data: string[][]): DemographicRow[] {
 }
 
 export async function fetchDashboardData(): Promise<DashboardData> {
-  const [anunciosData, resumoData, posicionamentosData, demograficosData] =
+  const [campanhasData, anunciosData, resumoData, posicionamentosData, demograficosData] =
     await Promise.all([
+      fetchTabCSV(GID_CAMPANHAS),
       fetchTabCSV(GID_ANUNCIOS),
       fetchTabCSV(GID_RESUMO),
       fetchTabCSV(GID_POSICIONAMENTOS),
       fetchTabCSV(GID_DEMOGRAFICOS),
     ]);
 
+  const campaignRows = parseCampaigns(campanhasData);
   const rows = parseAnuncios(anunciosData);
   const summary = parseResumo(resumoData);
   const placements = parsePlacements(posicionamentosData);
@@ -421,6 +480,7 @@ export async function fetchDashboardData(): Promise<DashboardData> {
       avgCtr: totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0,
       avgCpc: totalClicks > 0 ? totalSpent / totalClicks : 0,
     },
+    campaignRows,
     summary,
     placements,
     demographics,
