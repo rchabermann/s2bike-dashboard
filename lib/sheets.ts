@@ -162,14 +162,20 @@ async function fetchTabCSV(gid: string): Promise<string[][]> {
   }
 }
 
-// Colunas da aba Anúncios (gid=79328799):
-// 0=Data Início, 2=Campanha, 5=Conjunto, 7=Anúncio
-// 10=Investimento, 12=Impressões, 13=Alcance, 14=Frequência
-// 18=Cliques no Link, 23=CTR Total(%), 27=CPC, 28=CPM
-// 35=Resultados, 37=Custo/Resultado
-// 39=Eng.Post, 41=Reações, 42=Comentários, 43=Compartilhamentos
-// 47=Videoviews(3s), 50=ThruPlay
-// 60=Conversas WhatsApp(7d)
+// Colunas da aba Anúncios (gid=79328799) — sem colunas separadoras:
+// 0=Data Início, 1=Data Fim, 2=Campanha, 3=ID Campanha, 4=Objetivo
+// 5=Conjunto, 6=ID Conjunto, 7=Anúncio, 8=ID Anúncio
+// 9=Investimento, 10=Invest.Social, 11=Impressões, 12=Alcance, 13=Frequência
+// 14=Cliques(Total), 15=Cliques Únicos, 16=Cliques no Link, 17=Cliques Únicos no Link
+// 18=Cliques Outbound, 19=Cliques Únicos Outbound, 20=Cliques Inline
+// 21=CTR Total(%), 22=CTR Único, 23=CTR Outbound, 24=CTR Único Outbound
+// 25=CPC, 26=CPM, 27=Views de Página
+// 28=Ranking Qualidade, 29=Ranking Engajamento, 30=Ranking Conversão
+// 31=Resultados, 32=Tipo Resultado, 33=Custo/Resultado
+// 34=Eng.Post, 35=Eng.Inline, 36=Reações, 37=Comentários, 38=Compartilhamentos
+// 39=Salvamentos, 40=Cliques Foto/Vídeo
+// 41=Videoviews(3s), 42=Videoviews Contínuos, 43=Reproduções, 44=ThruPlay
+// 53=Conversas WhatsApp(7d)
 function parseAnuncios(data: string[][]): AdRow[] {
   return data
     .slice(1)
@@ -177,29 +183,29 @@ function parseAnuncios(data: string[][]): AdRow[] {
       if (!cols || cols.length < 10) return null;
       const day = String(cols[0] ?? "").trim();
       if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
-      const impressions = parseBR(String(cols[12]));
+      const impressions = parseBR(String(cols[11]));
       if (impressions === 0) return null;
       return {
         day,
         campaignName: String(cols[2] ?? "").trim(),
         adSetName: String(cols[5] ?? "").trim(),
         adName: String(cols[7] ?? "").trim(),
-        amountSpent: parseBR(String(cols[10])),
+        amountSpent: parseBR(String(cols[9])),
         impressions,
-        reach: parseBR(String(cols[13])),
-        frequency: parseBR(String(cols[14])),
-        linkClicks: parseBR(String(cols[18])),
-        ctr: parseBR(String(cols[23])),
-        cpc: parseBR(String(cols[27])),
-        cpm: parseBR(String(cols[28])),
-        costPerResult: parseBR(String(cols[37])),
-        engPost: parseBR(String(cols[39])),
-        reactions: parseBR(String(cols[41])),
-        comments: parseBR(String(cols[42])),
-        shares: parseBR(String(cols[43])),
-        videoViews3s: parseBR(String(cols[47])),
-        thruPlay: parseBR(String(cols[50])),
-        messagingConversations: parseBR(String(cols[60])),
+        reach: parseBR(String(cols[12])),
+        frequency: parseBR(String(cols[13])),
+        linkClicks: parseBR(String(cols[16])),
+        ctr: parseBR(String(cols[21])),
+        cpc: parseBR(String(cols[25])),
+        cpm: parseBR(String(cols[26])),
+        costPerResult: parseBR(String(cols[33])),
+        engPost: parseBR(String(cols[34])),
+        reactions: parseBR(String(cols[36])),
+        comments: parseBR(String(cols[37])),
+        shares: parseBR(String(cols[38])),
+        videoViews3s: parseBR(String(cols[41])),
+        thruPlay: parseBR(String(cols[44])),
+        messagingConversations: parseBR(String(cols[53])),
       };
     })
     .filter((r): r is AdRow => r !== null);
@@ -245,10 +251,14 @@ function parseResumo(data: string[][]): DashboardData["summary"] {
   return { "7": makeSummary(1), "14": makeSummary(2), "30": makeSummary(3) };
 }
 
-// Colunas Posicionamentos / Demograficos (estrutura idêntica, apenas dim. cols diferentes):
-// 3=dim1, 4=dim2, 5=Investimento, 6=Impressões, 7=Alcance, 8=Frequência
+// Colunas Posicionamentos / Demograficos — sem separadores:
+// Posicionamentos: 3=Plataforma, 4=Posicionamento
+// Demograficos:    3=Faixa Etária, 4=Gênero
+// Comum: 0=Campanha, 1=ID Campanha, 2=Objetivo
+// 5=Investimento, 6=Impressões, 7=Alcance, 8=Frequência
 // 9=Cliques(Total), 10=Cliques no Link, 11=CTR, 12=CPC, 13=CPM
-// 14=Resultados, 23=Conversas WhatsApp, 26=Videoviews(3s)
+// 14=Resultados, 15=Tipo Resultado, 16=Custo/Resultado
+// 23=Conversas WhatsApp, 26=Videoviews(3s)
 function parsePlacements(data: string[][]): PlacementRow[] {
   return data
     .slice(1)
